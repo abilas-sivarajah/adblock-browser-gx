@@ -16,49 +16,6 @@ class HistoryDialog(QDialog):
         self.bm_manager = bm_history_manager
         self.setWindowTitle("Verlauf - AdBlock Browser")
         self.resize(700, 500)
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0f172a;
-                color: #f8fafc;
-            }
-            QLineEdit {
-                background: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 14px;
-            }
-            QListWidget {
-                background: #1e293b;
-                color: #e2e8f0;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                padding: 4px;
-            }
-            QListWidget::item {
-                padding: 10px;
-                border-bottom: 1px solid #334155;
-                border-radius: 4px;
-            }
-            QListWidget::item:hover {
-                background: #334155;
-            }
-            QListWidget::item:selected {
-                background: #0284c7;
-                color: #ffffff;
-            }
-            QPushButton {
-                background-color: #334155;
-                color: #f8fafc;
-                border: 1px solid #475569;
-                border-radius: 6px;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-            }
-        """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -78,12 +35,13 @@ class HistoryDialog(QDialog):
         # Actions
         btn_bar = QHBoxLayout()
         clear_btn = QPushButton("Verlauf leeren")
-        clear_btn.setStyleSheet("background: #7f1d1d; border-color: #991b1b;")
+        clear_btn.setObjectName("dangerBtn")
         clear_btn.clicked.connect(self.on_clear_clicked)
         btn_bar.addWidget(clear_btn)
 
         btn_bar.addStretch()
         open_btn = QPushButton("Öffnen")
+        open_btn.setObjectName("primaryBtn")
         open_btn.clicked.connect(self.on_open_clicked)
         close_btn = QPushButton("Schließen")
         close_btn.clicked.connect(self.accept)

@@ -1,4 +1,6 @@
-# 🛡️ AdBlock Browser (Claude-Variante)
+# 🛡️ AdBlock Browser GX (Claude-Variante)
+
+![Startseite](assets/screenshots/gx_startseite.png)
 
 Desktop-Browser für Windows: **PyQt6**-Oberfläche, **Microsoft Edge WebView2** als Web-Engine
 (per pythonnet eingebettet) und die **Brave AdBlock Rust-Engine** (`adblock`) als Werbeblocker.
@@ -40,6 +42,27 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
   Lesezeichenleiste und das Fenster geht in den Vollbildmodus.
 - Tabs, Startseite mit eigenen Schnellzugriffen (werden gespeichert), Lesezeichen, Verlauf,
   Suche auf der Seite, Zoom, Entwicklertools.
+
+## 🎮 Design (GX)
+
+Gamer-Look im Stil von Opera GX – dunkle Flächen, eine Neon-Akzentfarbe, Schrift Bahnschrift.
+
+- **Eigene Titelleiste** mit den Tabs (rahmenloses Fenster): oben ziehen = verschieben (Aero Snap),
+  Doppelklick = maximieren, an den Rändern ziehen = Größe ändern.
+- **Tabs** mit Favicon, **Lautsprecher-Symbol** wenn ein Tab Ton abspielt (Klick = stumm),
+  Mittelklick schließt, Rechtsklick: neu laden, duplizieren, stummschalten, andere schließen.
+- **Seitenleiste:** Startseite, Twitch, YouTube, Discord (öffnet oder springt zum vorhandenen Tab),
+  Lesezeichen, Verlauf, Werbe-Protokoll, GX Control, Shield.
+- **GX Control** (Paletten-Symbol unten in der Seitenleiste): 8 Akzentfarben – GX Rot, Neon Pink,
+  Ultra Violett, Cyber Cyan, Toxic Grün, Lava Orange, Eis Blau, Gold Rush – sowie Seitenleiste,
+  Lesezeichenleiste und animierter Hintergrund an/aus. Wirkt sofort.
+- **Startseite:** Neon-Nebel + Synthwave-Gitter in der Akzentfarbe, Uhr, Suche (`/`),
+  Schnellzugriff-Kacheln (eigene hinzufügen/entfernen), Shield-Statistik inkl. abgefangener
+  Video-Werbung pro Seite.
+
+| Twitch | GX Control | Shield |
+|---|---|---|
+| ![Twitch](assets/screenshots/gx_twitch.png) | ![GX Control](assets/screenshots/gx_control.png) | ![Shield](assets/screenshots/gx_shield.png) |
 
 ## 🚀 Starten
 
@@ -114,7 +137,11 @@ jedem Filterlisten-Update mitgeladen.
 ```
 adblock-browser-claude/
 ├── main.py               # Einstiegspunkt
-├── main_window.py        # Hauptfenster, Tabs, Navigation, Vollbild, Tastenkürzel
+├── main_window.py        # Hauptfenster (rahmenlos), Tabs, Navigation, Vollbild, Tastenkürzel
+├── gx_widgets.py         # Titelleiste mit Tabs, Fensterknöpfe, Seitenleiste
+├── theme.py              # GX-Farben, Akzentfarben, Stylesheet, Design-Einstellungen
+├── icons.py              # Linien-Icons (SVG) in beliebiger Farbe
+├── design_dialog.py      # GX Control (Akzentfarbe, Seitenleiste, Animation)
 ├── browser_tab.py        # Tab mit WebView2: Blocker, kosmetische Filter, Popups, Startseite
 ├── filter_engine.py      # Brave-Engine, Filterlisten, Ausnahmeliste, Anfrage-Typen
 ├── site_fixes.txt        # Seiten-Fixes (u. a. South Park) in Adblock-Syntax
@@ -126,12 +153,13 @@ adblock-browser-claude/
 │   ├── twitch_worker.js  # Twitch: Werbe-Playlists erkennen, werbefreien Stream einsetzen
 │   ├── youtube.js        # YouTube: Werbe-Daten entfernen, Fallback, Werbeblöcke ausblenden
 │   └── ad_watch.js       # erkennt durchgerutschte Werbung und meldet sie ans Protokoll
-├── start_page.py         # Startseite (virtueller Host start.adblockbrowser.example)
+├── start_page.py         # GX-Startseite (virtueller Host start.adblockbrowser.example)
 ├── bookmarks_history.py  # Lesezeichen & Verlauf (JSON)
 ├── adblock_dialog.py     # Shield-Dashboard
 ├── history_dialog.py     # Verlaufsdialog
 ├── create_shortcut.py    # Desktop-Verknüpfung
-└── browser_data/         # Profil, Filterlisten, Einstellungen (wird automatisch angelegt)
+├── assets/screenshots/   # Vorschaubilder für diese README
+└── browser_data/         # Profil, Filterlisten, Einstellungen, ui_settings.json (automatisch angelegt)
 ```
 
 ## ⚠️ Grenzen

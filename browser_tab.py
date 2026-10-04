@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFrame
 )
 from PyQt6.QtCore import pyqtSignal, QTimer, Qt
-from PyQt6.QtGui import QWindow, QKeySequence, QShortcut
+from PyQt6.QtGui import QWindow, QKeySequence, QShortcut, QPixmap, QIcon
 
 # The WebView2 .NET assemblies ship with pywebview.
 WV2_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(webview.__file__)), "lib")
@@ -69,9 +69,12 @@ class BrowserTab(QWidget):
     shortcut_pressed = pyqtSignal(str)
     fullscreen_requested = pyqtSignal(bool)
     close_requested = pyqtSignal()
+    favicon_changed = pyqtSignal(QIcon)        # empty QIcon = no favicon
+    audio_changed = pyqtSignal(bool, bool)     # playing, muted
 
-    def __init__(self, filter_engine, parent=None, ad_logger=None):
+    def __init__(self, filter_engine, parent=None, ad_logger=None, start_page_writer=None):
         super().__init__(parent)
+        self.start_page_writer = start_page_writer  # writes the themed start page (MainWindow)
         self.filter_engine = filter_engine
         self.ad_logger = ad_logger
         # last network requests of this tab, written into ad-log incidents
@@ -132,33 +135,7 @@ class BrowserTab(QWidget):
 
     def create_find_bar(self) -> QWidget:
         bar = QFrame()
-        bar.setStyleSheet("""
-            QFrame {
-                background: #1e293b;
-                border-bottom: 1px solid #334155;
-                padding: 6px 12px;
-            }
-            QLineEdit {
-                background: #0f172a;
-                color: #f8fafc;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                padding: 4px 8px;
-            }
-            QPushButton {
-                background: #334155;
-                color: #f8fafc;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                padding: 4px 10px;
-            }
-            QPushButton:hover {
-                background: #475569;
-            }
-            QLabel {
-                color: #94a3b8;
-            }
-        """)
+        bar.setObjectName("findBar")
         h_layout = QHBoxLayout(bar)
         h_layout.setContentsMargins(8, 4, 8, 4)
         h_layout.setSpacing(8)
@@ -222,6 +199,9 @@ class BrowserTab(QWidget):
         core.ContainsFullScreenElementChanged += self.on_fullscreen_element_changed
         core.WindowCloseRequested += self.on_window_close_requested
         core.ProcessFailed += self.on_process_failed
+        core.FaviconChanged += self.on_favicon_changed
+        core.IsDocumentPlayingAudioChanged += self.on_audio_changed
+        core.IsMutedChanged += self.on_audio_changed
 
         # Element hiding: page reports its classes/ids, we answer with CSS
         core.WebMessageReceived += self.on_web_message
@@ -460,7 +440,10 @@ class BrowserTab(QWidget):
         if not self.is_ready:
             self.pending_url = "about:start"
             return
-        write_start_page(self.start_page_dir, self.filter_engine.total_blocked)
+        if self.start_page_writer:
+            self.start_page_writer(self.start_page_dir)
+        else:
+            write_start_page(self.start_page_dir, self.filter_engine.total_blocked)
         self.wv.CoreWebView2.Navigate(START_URL)
 
     def back(self):
@@ -499,6 +482,47 @@ class BrowserTab(QWidget):
     def focus_page(self):
         if self.is_ready:
             self.wv.Focus()
+
+    # --- favicon & audio (tab bar) ---
+    def on_favicon_changed(self, sender, args):
+        if not sender.FaviconUri or is_start_page(sender.Source):
+            self.favicon_changed.emit(QIcon())
+            return
+        try:
+            task = sender.GetFaviconAsync(WVC.CoreWebView2FaviconImageFormat.Png)
+        except Exception as e:
+            logger.debug(f"Favicon request failed: {e}")
+            return
+
+        def done():
+            if not task.IsCompleted:
+                QTimer.singleShot(50, done)
+                return
+            if task.IsFaulted or task.Result is None:
+                return
+            try:
+                stream = task.Result
+                buf = System.IO.MemoryStream()
+                stream.CopyTo(buf)
+                data = bytes(buf.ToArray())
+                stream.Dispose()
+            except Exception as e:
+                logger.debug(f"Favicon read failed: {e}")
+                return
+            pm = QPixmap()
+            if data and pm.loadFromData(data):
+                self.favicon_changed.emit(QIcon(pm))
+        QTimer.singleShot(50, done)
+
+    def on_audio_changed(self, sender, args):
+        self.audio_changed.emit(bool(sender.IsDocumentPlayingAudio), bool(sender.IsMuted))
+
+    def is_muted(self) -> bool:
+        return self.is_ready and bool(self.wv.CoreWebView2.IsMuted)
+
+    def set_muted(self, muted: bool):
+        if self.is_ready:
+            self.wv.CoreWebView2.IsMuted = bool(muted)
 
     def dispose(self):
         """Releases the WebView2 controller (stops audio/video and frees the renderer)."""

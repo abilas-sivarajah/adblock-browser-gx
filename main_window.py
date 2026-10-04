@@ -1,37 +1,73 @@
 """
-Main Window for AdBlock Browser using Microsoft Edge WebView2.
-Modern Chromium-styled tabbed browser with integrated Brave AdBlock engine,
-Full Widevine DRM, PlayReady, H.264, AAC and hardware accelerated video support.
+Main window of AdBlock Browser GX: frameless window with tabs in the title bar, sidebar,
+navigation bar and the Microsoft Edge WebView2 pages (BrowserTab) underneath.
 """
 
+import ctypes
 import os
 import re
 import time
 import urllib.parse
-from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QLineEdit, QPushButton, QToolBar,
-    QProgressBar, QLabel, QMenu, QMessageBox
-)
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon, QKeySequence, QShortcut
 
-from filter_engine import FilterEngine, host_of
-from browser_tab import BrowserTab
-from bookmarks_history import BookmarksHistoryManager
-from adblock_dialog import AdBlockDialog
+from PyQt6.QtCore import QEvent, QSize, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QShortcut
+from PyQt6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLineEdit, QMainWindow,
+                             QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget, QTabBar,
+                             QToolButton, QVBoxLayout, QWidget)
+
+import icons
+import theme
 from ad_logger import AdLogger
-from filter_engine import DEFAULT_FILTER_SOURCES
+from adblock_dialog import AdBlockDialog
+from bookmarks_history import BookmarksHistoryManager
+from browser_tab import BrowserTab
+from design_dialog import DesignDialog
+from filter_engine import DEFAULT_FILTER_SOURCES, FilterEngine, host_of
+from gx_widgets import SideBar, TabArea, TitleBar
 from history_dialog import HistoryDialog
+from start_page import write_start_page
+
+APP_NAME = "AdBlock Browser GX"
+RESIZE_MARGIN = 5
+
+# sidebar shortcuts: open the site, or switch to a tab that already shows it
+SITE_SHORTCUTS = {
+    "twitch": ("twitch.tv", "https://www.twitch.tv"),
+    "youtube": ("youtube.com", "https://www.youtube.com"),
+    "discord": ("discord.com", "https://discord.com/app"),
+}
+
+
+class ResizeGrip(QWidget):
+    """Invisible strip/corner at the window edge of the frameless window."""
+    CURSORS = {
+        Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor, Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
+        Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor, Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
+    }
+
+    def __init__(self, parent, edges):
+        super().__init__(parent)
+        self.edges = edges
+        if edges in self.CURSORS:
+            self.setCursor(self.CURSORS[edges])
+        elif edges in (Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.Edge.RightEdge | Qt.Edge.BottomEdge):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        else:
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self.window().windowHandle():
+            self.window().windowHandle().startSystemResize(self.edges)
+
 
 class MainWindow(QMainWindow):
     def __init__(self, data_dir: str, initial_url: str = None):
         super().__init__()
         self.data_dir = data_dir
-        self.setWindowTitle("AdBlock Browser")
-        self.resize(1280, 850)
+        self.setWindowTitle(APP_NAME)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.resize(1360, 880)
 
-        # Set application icon
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icon.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -41,6 +77,7 @@ class MainWindow(QMainWindow):
         self._chrome_visibility = []
         self._was_fullscreen = False
         self._was_maximized = False
+        self._loading = False
         # ADBLOCK_HIDDEN_WINDOW: off-screen test mode, never change the real window state
         self._hidden_test_mode = bool(os.environ.get("ADBLOCK_HIDDEN_WINDOW"))
 
@@ -49,243 +86,214 @@ class MainWindow(QMainWindow):
         self.bm_manager = BookmarksHistoryManager(data_dir)
         self.ad_logger = AdLogger(data_dir)
         self.ad_logger.environment.update(self._environment_info())
+        self.ui = theme.UISettings(data_dir)
+        self.icon_files = icons.IconFiles(os.path.join(data_dir, "ui_cache", "icons"))
 
-        # Setup modern dark stylesheet
-        self.setup_stylesheet()
-
-        # Build UI
         self.setup_ui()
+        self.apply_theme()
         self.setup_shortcuts()
 
         # Open initial tab
         self.open_new_tab(initial_url)
 
-    def setup_stylesheet(self):
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #0f172a;
-            }
-            QToolBar {
-                background-color: #0f172a;
-                border: none;
-                spacing: 6px;
-                padding: 4px 10px;
-            }
-            QTabWidget::pane {
-                border: none;
-                background-color: #0f172a;
-            }
-            QTabBar {
-                background-color: #0b1120;
-                qproperty-drawBase: 0;
-            }
-            QTabBar::tab {
-                background-color: #1e293b;
-                color: #94a3b8;
-                padding: 8px 16px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                margin-right: 4px;
-                max-width: 220px;
-                min-width: 100px;
-                font-size: 13px;
-                border: 1px solid #334155;
-                border-bottom: none;
-            }
-            QTabBar::tab:selected {
-                background-color: #0f172a;
-                color: #f8fafc;
-                border-top: 2px solid #38bdf8;
-                font-weight: 500;
-            }
-            QTabBar::tab:hover:!selected {
-                background-color: #334155;
-                color: #cbd5e1;
-            }
-            QLineEdit#addressBar {
-                background-color: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 18px;
-                padding: 6px 14px;
-                font-size: 13px;
-                selection-background-color: #0284c7;
-            }
-            QLineEdit#addressBar:focus {
-                border-color: #38bdf8;
-                background-color: #0f172a;
-            }
-            QToolButton, QPushButton {
-                background-color: transparent;
-                color: #cbd5e1;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 14px;
-            }
-            QToolButton:hover, QPushButton:hover {
-                background-color: #334155;
-                color: #ffffff;
-            }
-            QToolButton:pressed, QPushButton:pressed {
-                background-color: #1e293b;
-            }
-            QProgressBar {
-                border: none;
-                background-color: transparent;
-                height: 2px;
-            }
-            QProgressBar::chunk {
-                background-color: #38bdf8;
-            }
-            #shieldBtn {
-                background-color: rgba(16, 185, 129, 0.15);
-                border: 1px solid #10b981;
-                border-radius: 14px;
-                color: #34d399;
-                font-weight: 600;
-                padding: 4px 10px;
-                font-size: 12px;
-            }
-            #shieldBtn:hover {
-                background-color: rgba(16, 185, 129, 0.3);
-            }
-            #bookmarkBar {
-                background-color: #0f172a;
-                border-bottom: 1px solid #1e293b;
-                padding: 2px 10px;
-            }
-            #bookmarkBar QPushButton {
-                font-size: 12px;
-                padding: 4px 8px;
-                color: #94a3b8;
-            }
-            #bookmarkBar QPushButton:hover {
-                color: #f8fafc;
-                background-color: #1e293b;
-            }
-            QMenu {
-                background-color: #1e293b;
-                color: #f8fafc;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                padding: 6px;
-            }
-            QMenu::item {
-                padding: 8px 24px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #0284c7;
-            }
-            QMenu::separator {
-                height: 1px;
-                background-color: #334155;
-                margin: 4px 0;
-            }
-        """)
-
+    # ------------------------------------------------------------------ UI
     def setup_ui(self):
-        # Central widget with tabs
-        self.central_widget = QWidget(self)
-        self.setCentralWidget(self.central_widget)
+        root = QWidget(self)
+        root.setObjectName("gxRoot")
+        self.setCentralWidget(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        self.root_layout = QVBoxLayout(self.central_widget)
-        self.root_layout.setContentsMargins(0, 0, 0, 0)
-        self.root_layout.setSpacing(0)
+        # 1. title bar with the tabs
+        self.title_bar = TitleBar(self)
+        self.title_bar.logo_clicked.connect(lambda: self.show_main_menu(self.title_bar.logo))
+        self.title_bar.new_tab_clicked.connect(lambda: self.open_new_tab())
+        self.title_bar.tab_bar.context_menu_requested.connect(self.show_tab_menu)
+        outer.addWidget(self.title_bar)
 
-        # 1. Main Navigation Toolbar
-        self.nav_toolbar = QToolBar("Navigation", self)
-        self.nav_toolbar.setMovable(False)
-        self.addToolBar(self.nav_toolbar)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        outer.addLayout(body, 1)
 
-        # Back
-        self.btn_back = QPushButton("◀")
-        self.btn_back.setToolTip("Zurück (Alt+Links)")
-        self.btn_back.clicked.connect(self.navigate_back)
-        self.nav_toolbar.addWidget(self.btn_back)
+        # 2. sidebar
+        self.side_bar = SideBar(self)
+        self.side_bar.triggered.connect(self.on_sidebar)
+        body.addWidget(self.side_bar)
 
-        # Forward
-        self.btn_forward = QPushButton("▶")
-        self.btn_forward.setToolTip("Vorwärts (Alt+Rechts)")
-        self.btn_forward.clicked.connect(self.navigate_forward)
-        self.nav_toolbar.addWidget(self.btn_forward)
+        right = QVBoxLayout()
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(0)
+        body.addLayout(right, 1)
 
-        # Reload
-        self.btn_reload = QPushButton("🔄")
-        self.btn_reload.setToolTip("Neu laden (F5)")
-        self.btn_reload.clicked.connect(self.reload_current)
-        self.nav_toolbar.addWidget(self.btn_reload)
+        # 3. navigation bar
+        self.nav_toolbar = QWidget(self)
+        self.nav_toolbar.setObjectName("navBar")
+        self.nav_toolbar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.nav_toolbar.setFixedHeight(50)
+        nav = QHBoxLayout(self.nav_toolbar)
+        nav.setContentsMargins(10, 7, 12, 7)
+        nav.setSpacing(4)
 
-        # Home
-        self.btn_home = QPushButton("🏠")
-        self.btn_home.setToolTip("Startseite (Alt+Pos1)")
-        self.btn_home.clicked.connect(self.navigate_home)
-        self.nav_toolbar.addWidget(self.btn_home)
-
-        # Address bar
-        self.ssl_label = QLabel(" 🔒 ")
-        self.ssl_label.setStyleSheet("color: #10b981; font-size: 13px;")
-        self.nav_toolbar.addWidget(self.ssl_label)
+        self.btn_back = self._nav_button("Zurück (Alt+Links)", self.navigate_back)
+        self.btn_forward = self._nav_button("Vorwärts (Alt+Rechts)", self.navigate_forward)
+        self.btn_reload = self._nav_button("Neu laden (F5)", self.reload_current)
+        self.btn_home = self._nav_button("Startseite (Alt+Pos1)", self.navigate_home)
+        for b in (self.btn_back, self.btn_forward, self.btn_reload, self.btn_home):
+            nav.addWidget(b)
+        nav.addSpacing(6)
 
         self.address_bar = QLineEdit()
         self.address_bar.setObjectName("addressBar")
-        self.address_bar.setPlaceholderText("Webadresse oder Suchbegriff eingeben...")
+        self.address_bar.setPlaceholderText("Suchen oder Webadresse eingeben")
+        self.address_bar.setFixedHeight(36)
         self.address_bar.returnPressed.connect(self.navigate_to_address)
-        self.nav_toolbar.addWidget(self.address_bar)
+        self.addr_icon = QAction(self.address_bar)
+        self.address_bar.addAction(self.addr_icon, QLineEdit.ActionPosition.LeadingPosition)
+        self.star_action = QAction(self.address_bar)
+        self.star_action.setToolTip("Lesezeichen hinzufügen/entfernen (Strg+D)")
+        self.star_action.triggered.connect(self.toggle_current_bookmark)
+        self.address_bar.addAction(self.star_action, QLineEdit.ActionPosition.TrailingPosition)
+        nav.addWidget(self.address_bar, 1)
+        nav.addSpacing(8)
 
-        # Bookmark star button
-        self.btn_star = QPushButton("☆")
-        self.btn_star.setToolTip("Lesezeichen hinzufügen/entfernen (Strg+D)")
-        self.btn_star.clicked.connect(self.toggle_current_bookmark)
-        self.nav_toolbar.addWidget(self.btn_star)
-
-        # AdBlock Shield button
-        self.btn_shield = QPushButton("🛡️ 0")
+        self.btn_shield = QPushButton("0")
         self.btn_shield.setObjectName("shieldBtn")
-        self.btn_shield.setToolTip("AdBlock Shield & Datenschutz-Einstellungen")
-        self.btn_shield.clicked.connect(self.open_shield_dialog)
-        self.nav_toolbar.addWidget(self.btn_shield)
+        self.btn_shield.setToolTip("AdBlock Shield – Statistik, Ausnahmen, Werbe-Protokoll")
+        self.btn_shield.setIconSize(QSize(17, 17))
+        self.btn_shield.setFixedHeight(32)
+        self.btn_shield.clicked.connect(lambda: self.open_shield_dialog())
+        self.shield_glow = QGraphicsDropShadowEffect(self.btn_shield)
+        self.shield_glow.setOffset(0, 0)
+        self.shield_glow.setBlurRadius(18)
+        self.btn_shield.setGraphicsEffect(self.shield_glow)
+        nav.addWidget(self.btn_shield)
 
-        # Menu button
-        self.btn_menu = QPushButton("☰")
-        self.btn_menu.setToolTip("Menü")
-        self.btn_menu.clicked.connect(self.show_main_menu)
-        self.nav_toolbar.addWidget(self.btn_menu)
+        self.btn_menu = self._nav_button("Menü", lambda: self.show_main_menu(self.btn_menu))
+        nav.addWidget(self.btn_menu)
+        right.addWidget(self.nav_toolbar)
 
-        # 2. Progress Bar
-        self.progress_bar = QProgressBar(self)
-        self.progress_bar.setFixedHeight(2)
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.hide()
-        self.root_layout.addWidget(self.progress_bar)
-
-        # 3. Bookmarks Bar
+        # 4. bookmarks bar
         self.bookmarks_bar = QWidget()
         self.bookmarks_bar.setObjectName("bookmarkBar")
+        self.bookmarks_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.bm_layout = QHBoxLayout(self.bookmarks_bar)
-        self.bm_layout.setContentsMargins(10, 2, 10, 2)
-        self.bm_layout.setSpacing(6)
-        self.root_layout.addWidget(self.bookmarks_bar)
+        self.bm_layout.setContentsMargins(10, 3, 10, 3)
+        self.bm_layout.setSpacing(2)
+        right.addWidget(self.bookmarks_bar)
         self.update_bookmarks_bar()
 
-        # 4. Tab Widget
-        self.tabs = QTabWidget(self)
-        self.tabs.setDocumentMode(True)
-        self.tabs.setTabsClosable(True)
-        self.tabs.setMovable(True)
+        # 5. loading line (always 2 px high, so pages do not jump)
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setObjectName("gxProgress")
+        self.progress_bar.setFixedHeight(2)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setValue(0)
+        right.addWidget(self.progress_bar)
+
+        # 6. pages
+        self.page_stack = QStackedWidget(self)
+        right.addWidget(self.page_stack, 1)
+        self.tabs = TabArea(self.title_bar.tab_bar, self.page_stack)
         self.tabs.currentChanged.connect(self.on_current_tab_changed)
         self.tabs.tabCloseRequested.connect(self.close_tab)
 
-        # Add "+" button on tab bar
-        self.btn_new_tab = QPushButton(" + ")
-        self.btn_new_tab.setToolTip("Neuer Tab (Strg+T)")
-        self.btn_new_tab.setStyleSheet("font-size: 16px; font-weight: bold; padding: 4px 10px; color: #94a3b8;")
-        self.btn_new_tab.clicked.connect(lambda: self.open_new_tab())
-        self.tabs.setCornerWidget(self.btn_new_tab, Qt.Corner.TopLeftCorner)
+        # frameless window: resize grips around the edge
+        self.grips = [ResizeGrip(self, e) for e in (
+            Qt.Edge.LeftEdge, Qt.Edge.RightEdge, Qt.Edge.TopEdge, Qt.Edge.BottomEdge,
+            Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.Edge.RightEdge | Qt.Edge.TopEdge,
+            Qt.Edge.LeftEdge | Qt.Edge.BottomEdge, Qt.Edge.RightEdge | Qt.Edge.BottomEdge)]
+        self._update_frame()
 
-        self.root_layout.addWidget(self.tabs)
+    def _nav_button(self, tip, slot):
+        b = QToolButton(self)
+        b.setObjectName("navBtn")
+        b.setToolTip(tip)
+        b.setIconSize(QSize(19, 19))
+        b.setFixedSize(34, 34)
+        b.clicked.connect(slot)
+        return b
 
+    # ------------------------------------------------------------------ theme
+    def apply_theme(self):
+        accent = self.ui["accent"]
+        QApplication.instance().setStyleSheet(theme.build_stylesheet(accent, self.icon_files))
+        self.title_bar.apply_theme(accent)
+        self.side_bar.apply_theme(accent)
+        self.side_bar.setVisible(bool(self.ui["sidebar"]))
+        self.bookmarks_bar.setVisible(bool(self.ui["bookmarks_bar"]))
+        self.btn_back.setIcon(icons.icon("back", theme.MUTED, 19, theme.TEXT))
+        self.btn_forward.setIcon(icons.icon("forward", theme.MUTED, 19, theme.TEXT))
+        self.btn_home.setIcon(icons.icon("home", theme.MUTED, 19, theme.TEXT))
+        self.btn_menu.setIcon(icons.icon("menu", theme.MUTED, 19, theme.TEXT))
+        self._set_reload_icon()
+        self.shield_glow.setColor(QColor(accent))
+        for i in range(self.tabs.count()):
+            self._refresh_tab_icon(self.tabs.widget(i))
+        tab = self.get_current_tab()
+        if tab:
+            self.update_address_bar(tab.current_url_str)
+            self.update_bookmark_star(tab.current_url_str)
+            self.update_shield_badge(tab.blocked_count)
+
+    def on_design_changed(self):
+        self.apply_theme()
+        # start pages pick up the new accent / animation setting
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if tab.current_url_str == "about:start":
+                tab.load_start_page()
+
+    def write_start_page(self, folder: str):
+        write_start_page(folder, self.filter_engine.total_blocked, self.ui["accent"],
+                         self.ad_logger.counts(), bool(self.ui["animations"]))
+
+    # ------------------------------------------------------------------ frameless window
+    def _update_frame(self):
+        plain = self.isMaximized() or self.isFullScreen()
+        m = 0 if plain else RESIZE_MARGIN
+        self.setContentsMargins(m, m, m, m)
+        for g in self.grips:
+            g.setVisible(not plain)
+        self._place_grips()
+
+    def _place_grips(self):
+        w, h, m, c = self.width(), self.height(), RESIZE_MARGIN, RESIZE_MARGIN * 3
+        geo = [(0, c, m, h - 2 * c), (w - m, c, m, h - 2 * c), (c, 0, w - 2 * c, m), (c, h - m, w - 2 * c, m),
+               (0, 0, c, m), (w - c, 0, c, m), (0, h - m, c, m), (w - c, h - m, c, m)]
+        for g, (x, y, gw, gh) in zip(self.grips, geo):
+            g.setGeometry(x, y, gw, gh)
+            g.raise_()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._place_grips()
+
+    def changeEvent(self, e):
+        if e.type() == QEvent.Type.WindowStateChange:
+            self._update_frame()
+            self.title_bar.update_max_icon()
+        super().changeEvent(e)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._native_window_style()
+
+    def _native_window_style(self):
+        """Taskbar click minimises/restores, Windows 11 rounds the corners."""
+        try:
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            GWL_STYLE, WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX = -16, 0x00080000, 0x00020000, 0x00010000
+            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+            user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
+            pref = ctypes.c_int(2)  # DWMWCP_ROUND
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ shortcuts
     def setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+T"), self, lambda: self.open_new_tab())
         QShortcut(QKeySequence("Ctrl+W"), self, lambda: self.close_tab(self.tabs.currentIndex()))
@@ -311,11 +319,10 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+-"), self, self.zoom_out)
         QShortcut(QKeySequence("Ctrl+0"), self, self.zoom_reset)
 
-    # --- Tab Management ---
+    # ------------------------------------------------------------------ tabs
     def open_new_tab(self, url: str = None) -> BrowserTab:
-        tab = BrowserTab(self.filter_engine, self, ad_logger=self.ad_logger)
+        tab = BrowserTab(self.filter_engine, self, ad_logger=self.ad_logger, start_page_writer=self.write_start_page)
 
-        # Connect tab signals
         tab.title_changed.connect(lambda t: self.on_tab_title_changed(tab, t))
         tab.url_changed.connect(lambda u: self.on_tab_url_changed(tab, u))
         tab.load_progress.connect(lambda p: self.on_tab_load_progress(tab, p))
@@ -324,15 +331,19 @@ class MainWindow(QMainWindow):
         tab.shortcut_pressed.connect(self.handle_shortcut)
         tab.fullscreen_requested.connect(lambda on: self.on_tab_fullscreen_requested(tab, on))
         tab.close_requested.connect(lambda: self.close_tab(self.tabs.indexOf(tab)))
+        tab.favicon_changed.connect(lambda ic: self.on_tab_favicon(tab, ic))
+        tab.audio_changed.connect(lambda playing, muted: self.on_tab_audio(tab, playing, muted))
+        tab.favicon = QIcon()
+        tab.audio_state = (False, False)
 
         idx = self.tabs.addTab(tab, "Neuer Tab")
         self.tabs.setCurrentIndex(idx)
+        self._refresh_tab_icon(tab)
 
         if url and url != "about:start":
             tab.load(url)
         else:
             tab.load_start_page()
-
         return tab
 
     def close_tab(self, index: int):
@@ -354,12 +365,10 @@ class MainWindow(QMainWindow):
         return self.tabs.currentWidget()
 
     def next_tab(self):
-        idx = (self.tabs.currentIndex() + 1) % self.tabs.count()
-        self.tabs.setCurrentIndex(idx)
+        self.tabs.setCurrentIndex((self.tabs.currentIndex() + 1) % self.tabs.count())
 
     def prev_tab(self):
-        idx = (self.tabs.currentIndex() - 1) % self.tabs.count()
-        self.tabs.setCurrentIndex(idx)
+        self.tabs.setCurrentIndex((self.tabs.currentIndex() - 1) % self.tabs.count())
 
     def on_current_tab_changed(self, index: int):
         tab = self.get_current_tab()
@@ -368,35 +377,100 @@ class MainWindow(QMainWindow):
         self.update_address_bar(tab.current_url_str)
         self.update_shield_badge(tab.blocked_count)
         self.update_bookmark_star(tab.current_url_str)
+        self.setWindowTitle(f"{tab.current_title_str} - {APP_NAME}")
 
     def on_tab_title_changed(self, tab: BrowserTab, title: str):
         idx = self.tabs.indexOf(tab)
         if idx != -1:
-            short_title = title if len(title) <= 22 else title[:20] + "..."
-            self.tabs.setTabText(idx, short_title or "Unbenannt")
+            self.tabs.setTabText(idx, title or "Unbenannt")
             self.tabs.setTabToolTip(idx, title)
 
         if tab == self.get_current_tab():
-            self.setWindowTitle(f"{title} - AdBlock Browser" if title else "AdBlock Browser")
+            self.setWindowTitle(f"{title} - {APP_NAME}" if title else APP_NAME)
             if tab.current_url_str and not tab.current_url_str.startswith("about:"):
                 self.bm_manager.add_history(title, tab.current_url_str)
 
     def on_tab_url_changed(self, tab: BrowserTab, url: str):
+        if url == "about:start":
+            tab.favicon = QIcon()  # other pages: WebView2 reports their favicon (FaviconChanged)
+        self._refresh_tab_icon(tab)
         if tab == self.get_current_tab():
             self.update_address_bar(url)
             self.update_bookmark_star(url)
 
+    def on_tab_favicon(self, tab: BrowserTab, ic: QIcon):
+        tab.favicon = ic
+        self._refresh_tab_icon(tab)
+
+    def _refresh_tab_icon(self, tab: BrowserTab):
+        idx = self.tabs.indexOf(tab)
+        if idx < 0:
+            return
+        if tab.current_url_str in ("", "about:start"):
+            ic = icons.icon("logo", self.ui["accent"], 16)
+        elif not tab.favicon.isNull():
+            ic = tab.favicon
+        else:
+            ic = icons.icon("globe", theme.MUTED, 16)
+        self.tabs.setTabIcon(idx, ic)
+
+    def on_tab_audio(self, tab: BrowserTab, playing: bool, muted: bool):
+        """Speaker button on the tab while it plays sound (click = mute), like Opera GX."""
+        tab.audio_state = (playing, muted)
+        idx = self.tabs.indexOf(tab)
+        if idx < 0:
+            return
+        bar = self.tabs.tabBar()
+        if not playing and not muted:
+            bar.setTabButton(idx, QTabBar.ButtonPosition.LeftSide, None)
+            return
+        btn = bar.tabButton(idx, QTabBar.ButtonPosition.LeftSide)
+        if not isinstance(btn, QToolButton):
+            btn = QToolButton(bar)
+            btn.setObjectName("navBtn")
+            btn.setFixedSize(20, 20)
+            btn.setIconSize(QSize(14, 14))
+            btn.clicked.connect(lambda: tab.set_muted(not tab.is_muted()))
+            bar.setTabButton(idx, QTabBar.ButtonPosition.LeftSide, btn)
+        btn.setIcon(icons.icon("volume-x" if muted else "volume", theme.DANGER if muted else self.ui["accent"], 14))
+        btn.setToolTip("Ton an" if muted else "Tab stummschalten")
+
+    def show_tab_menu(self, index: int, pos):
+        tab = self.tabs.widget(index)
+        if tab is None:
+            return
+        menu = QMenu(self)
+        menu.addAction(icons.icon("reload", theme.MUTED, 16), "Neu laden", tab.reload)
+        menu.addAction(icons.icon("copy", theme.MUTED, 16), "Tab duplizieren",
+                       lambda: self.open_new_tab(tab.current_url_str))
+        muted = tab.is_muted()
+        menu.addAction(icons.icon("volume" if muted else "volume-x", theme.MUTED, 16),
+                       "Ton an" if muted else "Tab stummschalten", lambda: tab.set_muted(not muted))
+        menu.addSeparator()
+        menu.addAction("Andere Tabs schließen", lambda: self.close_other_tabs(tab))
+        menu.addAction(icons.icon("x", theme.MUTED, 16), "Tab schließen", lambda: self.close_tab(self.tabs.indexOf(tab)))
+        menu.exec(pos)
+
+    def close_other_tabs(self, keep: BrowserTab):
+        for i in reversed(range(self.tabs.count())):
+            if self.tabs.widget(i) is not keep:
+                self.close_tab(i)
+
+    # ------------------------------------------------------------------ status widgets
     def on_tab_load_progress(self, tab: BrowserTab, progress: int):
-        if tab == self.get_current_tab():
-            if progress < 100:
-                self.progress_bar.show()
-                self.progress_bar.setValue(progress)
-                self.btn_reload.setText("✕")
-                self.btn_reload.setToolTip("Laden anhalten (Esc)")
-            else:
-                self.progress_bar.hide()
-                self.btn_reload.setText("🔄")
-                self.btn_reload.setToolTip("Neu laden (F5)")
+        if tab != self.get_current_tab():
+            return
+        self._loading = progress < 100
+        self.progress_bar.setValue(progress if self._loading else 0)
+        self._set_reload_icon()
+
+    def _set_reload_icon(self):
+        if self._loading:
+            self.btn_reload.setIcon(icons.icon("x", theme.MUTED, 19, theme.TEXT))
+            self.btn_reload.setToolTip("Laden anhalten (Esc)")
+        else:
+            self.btn_reload.setIcon(icons.icon("reload", theme.MUTED, 19, theme.TEXT))
+            self.btn_reload.setToolTip("Neu laden (F5)")
 
     def on_tab_blocked_count_changed(self, tab: BrowserTab, count: int):
         if tab == self.get_current_tab():
@@ -405,55 +479,44 @@ class MainWindow(QMainWindow):
     def update_shield_badge(self, count: int):
         tab = self.get_current_tab()
         host = host_of(tab.current_url_str) if tab and "://" in tab.current_url_str else ""
-
-        is_whitelisted = self.filter_engine.is_domain_whitelisted(host)
-        if not self.filter_engine.is_enabled or is_whitelisted:
-            self.btn_shield.setText("🛡️ AUS")
-            self.btn_shield.setStyleSheet("""
-                background-color: rgba(239, 68, 68, 0.15);
-                border: 1px solid #ef4444;
-                border-radius: 14px;
-                color: #f87171;
-                font-weight: 600;
-                padding: 4px 10px;
-                font-size: 12px;
-            """)
+        off = not self.filter_engine.is_enabled or self.filter_engine.is_domain_whitelisted(host)
+        accent = self.ui["accent"]
+        if off:
+            self.btn_shield.setText("AUS")
+            self.btn_shield.setIcon(icons.icon("shield-off", theme.DANGER, 17))
+            self.shield_glow.setColor(QColor(theme.DANGER))
         else:
-            self.btn_shield.setText(f"🛡️ {count}")
-            self.btn_shield.setStyleSheet("""
-                background-color: rgba(16, 185, 129, 0.15);
-                border: 1px solid #10b981;
-                border-radius: 14px;
-                color: #34d399;
-                font-weight: 600;
-                padding: 4px 10px;
-                font-size: 12px;
-            """)
+            self.btn_shield.setText(f"{count:,}".replace(",", "."))
+            self.btn_shield.setIcon(icons.icon("shield", accent, 17))
+            self.shield_glow.setColor(QColor(accent))
+        self.btn_shield.setProperty("off", off)
+        self.btn_shield.style().unpolish(self.btn_shield)
+        self.btn_shield.style().polish(self.btn_shield)
 
     def update_address_bar(self, url_str: str):
+        accent = self.ui["accent"]
         if not url_str or url_str == "about:start":
             self.address_bar.setText("")
-            self.ssl_label.setText(" 🏠 ")
-            self.ssl_label.setStyleSheet("color: #38bdf8;")
+            self.addr_icon.setIcon(icons.icon("search", accent, 16))
+            self.addr_icon.setToolTip("Startseite")
         else:
             self.address_bar.setText(url_str)
+            self.address_bar.setCursorPosition(0)
             if url_str.startswith("https://"):
-                self.ssl_label.setText(" 🔒 ")
-                self.ssl_label.setStyleSheet("color: #10b981;")
+                self.addr_icon.setIcon(icons.icon("lock", theme.OK, 16))
+                self.addr_icon.setToolTip("Verschlüsselte Verbindung")
             else:
-                self.ssl_label.setText(" 🌐 ")
-                self.ssl_label.setStyleSheet("color: #94a3b8;")
+                self.addr_icon.setIcon(icons.icon("globe", theme.MUTED, 16))
+                self.addr_icon.setToolTip("Nicht verschlüsselt")
 
-    # --- Navigation ---
+    # ------------------------------------------------------------------ navigation
     def navigate_to_address(self):
         tab = self.get_current_tab()
         if not tab:
             return
-
         text = self.address_bar.text().strip()
         if not text:
             return
-
         if text.startswith(("http://", "https://", "about:", "file://", "edge://")):
             dest = text
         elif re.match(r"^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(/.*)?$", text):
@@ -462,8 +525,8 @@ class MainWindow(QMainWindow):
             dest = "https://" + text
         else:
             dest = "https://duckduckgo.com/?q=" + urllib.parse.quote(text)
-
         tab.load(dest)
+        tab.focus_page()
 
     def navigate_back(self):
         tab = self.get_current_tab()
@@ -478,7 +541,7 @@ class MainWindow(QMainWindow):
     def reload_current(self, bypass_cache: bool = False):
         tab = self.get_current_tab()
         if tab:
-            if self.progress_bar.isVisible() and not bypass_cache:
+            if self._loading and not bypass_cache:
                 tab.stop()
             else:
                 tab.reload(bypass_cache)
@@ -487,7 +550,7 @@ class MainWindow(QMainWindow):
         tab = self.get_current_tab()
         if self.isFullScreen():
             self.toggle_fullscreen()
-        elif tab and self.progress_bar.isVisible():
+        elif tab and self._loading:
             tab.stop()
 
     def navigate_home(self):
@@ -495,39 +558,84 @@ class MainWindow(QMainWindow):
         if tab:
             tab.load_start_page()
 
-    # --- Bookmarks ---
-    def update_bookmarks_bar(self):
-        while self.bm_layout.count():
-            item = self.bm_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        bookmarks = self.bm_manager.get_bookmarks()
-        for b in bookmarks:
-            btn = QPushButton(b["title"])
-            url_str = b["url"]
-            btn.clicked.connect(lambda checked, u=url_str: self.load_url_in_current_tab(u))
-            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            btn.customContextMenuRequested.connect(lambda pos, u=url_str: self.show_bookmark_context_menu(pos, u))
-            self.bm_layout.addWidget(btn)
-
-        self.bm_layout.addStretch()
-
     def load_url_in_current_tab(self, url_str: str):
         tab = self.get_current_tab()
         if tab:
             tab.load(url_str)
 
-    def show_bookmark_context_menu(self, pos, url_str):
+    # ------------------------------------------------------------------ sidebar
+    def on_sidebar(self, name: str):
+        if name == "home":
+            self.navigate_home()
+        elif name in SITE_SHORTCUTS:
+            self.open_or_switch(*SITE_SHORTCUTS[name])
+        elif name == "bookmarks":
+            self.show_bookmarks_menu()
+        elif name == "history":
+            self.open_history_dialog()
+        elif name == "adlog":
+            self.open_shield_dialog(initial_tab=3)
+        elif name == "design":
+            self.open_design_dialog()
+        elif name == "shield":
+            self.open_shield_dialog()
+
+    def open_or_switch(self, host: str, url: str):
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if host_of(tab.current_url_str).endswith(host):
+                self.tabs.setCurrentIndex(i)
+                return
+        current = self.get_current_tab()
+        if current and current.current_url_str in ("", "about:start"):
+            current.load(url)
+        else:
+            self.open_new_tab(url)
+
+    def show_bookmarks_menu(self):
         menu = QMenu(self)
-        del_act = menu.addAction("Lesezeichen löschen")
-        action = menu.exec(self.bookmarks_bar.mapToGlobal(pos))
-        if action == del_act:
+        tab = self.get_current_tab()
+        if tab and "://" in tab.current_url_str:
+            starred = self.bm_manager.is_bookmarked(tab.current_url_str)
+            menu.addAction(icons.icon("star-fill" if starred else "star", self.ui["accent"], 16),
+                           "Lesezeichen entfernen" if starred else "Diese Seite merken\tStrg+D",
+                           self.toggle_current_bookmark)
+        menu.addAction("Lesezeichenleiste ausblenden" if self.bookmarks_bar.isVisible() else "Lesezeichenleiste anzeigen",
+                       self.toggle_bookmarks_bar)
+        menu.addSeparator()
+        for b in self.bm_manager.get_bookmarks():
+            menu.addAction(icons.icon("bookmark", theme.MUTED, 16), b["title"][:60],
+                           lambda u=b["url"]: self.load_url_in_current_tab(u))
+        btn = self.side_bar.buttons["bookmarks"][0]
+        menu.exec(btn.mapToGlobal(btn.rect().topRight()))
+
+    # ------------------------------------------------------------------ bookmarks
+    def update_bookmarks_bar(self):
+        while self.bm_layout.count():
+            item = self.bm_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for b in self.bm_manager.get_bookmarks():
+            btn = QPushButton(b["title"][:28])
+            btn.setToolTip(b["url"])
+            url_str = b["url"]
+            btn.clicked.connect(lambda checked, u=url_str: self.load_url_in_current_tab(u))
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(lambda pos, u=url_str, w=btn: self.show_bookmark_context_menu(w.mapToGlobal(pos), u))
+            self.bm_layout.addWidget(btn)
+        self.bm_layout.addStretch()
+
+    def show_bookmark_context_menu(self, global_pos, url_str):
+        menu = QMenu(self)
+        del_act = menu.addAction(icons.icon("x", theme.MUTED, 16), "Lesezeichen löschen")
+        if menu.exec(global_pos) == del_act:
             self.bm_manager.remove_bookmark(url_str)
             self.update_bookmarks_bar()
 
     def toggle_bookmarks_bar(self):
-        self.bookmarks_bar.setVisible(not self.bookmarks_bar.isVisible())
+        visible = not self.bookmarks_bar.isVisible()
+        self.bookmarks_bar.setVisible(visible)
+        self.ui.set("bookmarks_bar", visible)
 
     def toggle_current_bookmark(self):
         tab = self.get_current_tab()
@@ -537,26 +645,24 @@ class MainWindow(QMainWindow):
         title = tab.current_title_str or url
         if not url or url.startswith("about:"):
             return
-
         self.bm_manager.toggle_bookmark(title, url)
         self.update_bookmark_star(url)
         self.update_bookmarks_bar()
 
     def update_bookmark_star(self, url: str):
-        if self.bm_manager.is_bookmarked(url):
-            self.btn_star.setText("★")
-            self.btn_star.setStyleSheet("color: #facc15; font-size: 15px;")
+        if url and "://" in url and self.bm_manager.is_bookmarked(url):
+            self.star_action.setIcon(icons.icon("star-fill", self.ui["accent"], 16))
         else:
-            self.btn_star.setText("☆")
-            self.btn_star.setStyleSheet("color: #cbd5e1; font-size: 15px;")
+            self.star_action.setIcon(icons.icon("star", theme.DIM, 16, theme.TEXT))
+        self.star_action.setVisible(bool(url) and "://" in url)
 
-    # --- Shield Dialog ---
-    def open_shield_dialog(self):
+    # ------------------------------------------------------------------ dialogs
+    def open_shield_dialog(self, initial_tab: int = 0):
         tab = self.get_current_tab()
         url = tab.current_url_str if tab else ""
         count = tab.blocked_count if tab else 0
         dlg = AdBlockDialog(self.filter_engine, url, count, self, ad_logger=self.ad_logger,
-                            report_ad=self.report_ad)
+                            report_ad=self.report_ad, accent=self.ui["accent"], initial_tab=initial_tab)
         dlg.exec()
         if dlg.settings_changed:
             for i in range(self.tabs.count()):
@@ -566,7 +672,9 @@ class MainWindow(QMainWindow):
                 tab.reload()
             self.update_shield_badge(tab.blocked_count)
 
-    # --- History & Find ---
+    def open_design_dialog(self):
+        DesignDialog(self.ui, self.on_design_changed, self).exec()
+
     def open_history_dialog(self):
         dlg = HistoryDialog(self.bm_manager, self)
         dlg.url_selected.connect(self.load_url_in_current_tab)
@@ -577,12 +685,12 @@ class MainWindow(QMainWindow):
         if tab:
             tab.show_find_bar()
 
-    # --- DevTools & Zoom ---
     def open_devtools(self):
         tab = self.get_current_tab()
         if tab:
             tab.open_devtools()
 
+    # ------------------------------------------------------------------ fullscreen
     def toggle_fullscreen(self):
         tab = self._page_fullscreen_tab
         if tab is not None:
@@ -602,10 +710,10 @@ class MainWindow(QMainWindow):
                 return
             self._page_fullscreen_tab = tab
             self._chrome_visibility = [(w, w.isVisible()) for w in
-                                       (self.nav_toolbar, self.bookmarks_bar, self.tabs.tabBar(), tab.find_bar)]
+                                       (self.title_bar, self.side_bar, self.nav_toolbar, self.bookmarks_bar,
+                                        self.progress_bar, tab.find_bar)]
             for w, _ in self._chrome_visibility:
                 w.hide()
-            self.progress_bar.hide()
             self._was_fullscreen = self.isFullScreen()
             if not self._was_fullscreen and not self._hidden_test_mode:
                 self._was_maximized = self.isMaximized()
@@ -663,53 +771,27 @@ class MainWindow(QMainWindow):
         if tab:
             tab.set_zoom(1.0)
 
-    # --- Main Menu ---
-    def show_main_menu(self):
-        menu = QMenu(self)
-
-        new_tab_act = menu.addAction("Neuer Tab\tStrg+T")
-        new_tab_act.triggered.connect(lambda: self.open_new_tab())
-
-        history_act = menu.addAction("Verlauf\tStrg+H")
-        history_act.triggered.connect(self.open_history_dialog)
-
-        bm_bar_act = menu.addAction("Lesezeichenleiste ein/aus\tStrg+B")
-        bm_bar_act.triggered.connect(self.toggle_bookmarks_bar)
-
-        menu.addSeparator()
-
-        find_act = menu.addAction("Suchen auf der Seite\tStrg+F")
-        find_act.triggered.connect(self.show_find_in_page)
-
-        zoom_in_act = menu.addAction("Vergrößern\tStrg++")
-        zoom_in_act.triggered.connect(self.zoom_in)
-
-        zoom_out_act = menu.addAction("Verkleinern\tStrg+-")
-        zoom_out_act.triggered.connect(self.zoom_out)
-
-        zoom_reset_act = menu.addAction("Zoom zurücksetzen\tStrg+0")
-        zoom_reset_act.triggered.connect(self.zoom_reset)
-
-        menu.addSeparator()
-
-        devtools_act = menu.addAction("Entwicklertools\tF12")
-        devtools_act.triggered.connect(self.open_devtools)
-
-        fullscreen_act = menu.addAction("Vollbildmodus\tF11")
-        fullscreen_act.triggered.connect(self.toggle_fullscreen)
-
-        menu.addSeparator()
-
-        shield_act = menu.addAction("🛡️ AdBlock Einstellungen...")
-        shield_act.triggered.connect(self.open_shield_dialog)
-
-        report_act = menu.addAction("⚠️ Werbung auf dieser Seite melden")
-        report_act.triggered.connect(self.report_ad)
-
-        about_act = menu.addAction("Über AdBlock Browser")
-        about_act.triggered.connect(self.show_about_dialog)
-
-        menu.exec(self.btn_menu.mapToGlobal(self.btn_menu.rect().bottomRight()))
+    # ------------------------------------------------------------------ main menu
+    def show_main_menu(self, anchor):
+        m = QMenu(self)
+        ic = lambda name: icons.icon(name, theme.MUTED, 16)
+        m.addAction(ic("plus"), "Neuer Tab\tStrg+T", lambda: self.open_new_tab())
+        m.addAction(ic("history"), "Verlauf\tStrg+H", self.open_history_dialog)
+        m.addAction(ic("bookmark"), "Lesezeichenleiste ein/aus\tStrg+B", self.toggle_bookmarks_bar)
+        m.addSeparator()
+        m.addAction(ic("find"), "Suchen auf der Seite\tStrg+F", self.show_find_in_page)
+        m.addAction(ic("zoom"), "Vergrößern\tStrg++", self.zoom_in)
+        m.addAction("Verkleinern\tStrg+-", self.zoom_out)
+        m.addAction("Zoom zurücksetzen\tStrg+0", self.zoom_reset)
+        m.addSeparator()
+        m.addAction(ic("code"), "Entwicklertools\tF12", self.open_devtools)
+        m.addAction(ic("fullscreen"), "Vollbildmodus\tF11", self.toggle_fullscreen)
+        m.addSeparator()
+        m.addAction(icons.icon("palette", self.ui["accent"], 16), "GX Control – Design", self.open_design_dialog)
+        m.addAction(icons.icon("shield", self.ui["accent"], 16), "AdBlock Shield", lambda: self.open_shield_dialog())
+        m.addAction(ic("alert"), "Werbung auf dieser Seite melden", self.report_ad)
+        m.addAction(ic("info"), "Über AdBlock Browser GX", self.show_about_dialog)
+        m.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
     def _environment_info(self) -> dict:
         lists = {}
@@ -717,7 +799,7 @@ class MainWindow(QMainWindow):
             path = os.path.join(self.filter_engine.filters_dir, src["filename"])
             if os.path.exists(path):
                 lists[src["name"]] = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
-        return {"browser": "AdBlock Browser 2.2 (Claude-Variante)", "filterlisten": lists}
+        return {"browser": "AdBlock Browser GX 3.0 (Claude-Variante)", "filterlisten": lists}
 
     def report_ad(self):
         tab = self.get_current_tab()
@@ -731,21 +813,17 @@ class MainWindow(QMainWindow):
                 "Danke! Gespeichert mit Bildschirmfoto und den letzten Netzwerk-Anfragen:\n\n" + folder)
 
     def show_about_dialog(self):
+        accent = self.ui["accent"]
         QMessageBox.about(
             self,
-            "Über AdBlock Browser",
-            "<h3>AdBlock Browser v2.1 (Powered by Edge WebView2)</h3>"
-            "<p>Ein schneller, moderner Desktop-Browser mit integrierter "
-            "<b>Brave AdBlock Rust-Engine</b> und nativer <b>Microsoft Edge WebView2</b>-Engine.</p>"
-            "<p><b>Features:</b></p>"
+            "Über AdBlock Browser GX",
+            f"<h2 style='font-family:Bahnschrift'>AdBlock Browser <span style='color:{accent}'>GX</span></h2>"
+            "<p>Gamer-Browser auf Basis von <b>Microsoft Edge WebView2</b> mit der "
+            "<b>Brave AdBlock Rust-Engine</b>.</p>"
             "<ul>"
-            "<li>Vollständige Unterstützung für <b>Widevine DRM</b> und <b>H.264 / AAC</b></li>"
-            "<li>SouthPark.de, YouTube, Netflix und Streaming laufen einwandfrei</li>"
-            "<li>Filterung von EasyList, EasyPrivacy und EasyList Germany</li>"
-            "<li>Kosmetische Filterung (Ausblenden von Werbeflächen)</li>"
-            "<li>YouTube Werbe-Blockierung &amp; Überspringen</li>"
-            "<li>Live-Statistiken &amp; Monitor blockierter Anfragen</li>"
-            "<li>Ausnahmeliste (Whitelist) für einzelne Webseiten</li>"
-            "<li>Tabs, Lesezeichen, Verlauf &amp; Entwicklertools</li>"
+            "<li>Werbefrei: Twitch, YouTube, South Park</li>"
+            "<li>EasyList, EasyPrivacy, EasyList Germany, Peter Lowe</li>"
+            "<li>Element-Ausblendung, Popup-Blocker, Werbe-Protokoll</li>"
+            "<li>GX Control: Akzentfarben, Seitenleiste, Neon-Startseite</li>"
             "</ul>"
         )

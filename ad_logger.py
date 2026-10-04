@@ -131,7 +131,28 @@ class AdLogger:
         for old in folders[:-MAX_INCIDENTS]:
             shutil.rmtree(os.path.join(self.incident_dir, old), ignore_errors=True)
 
-    # --- reading (shield dialog) ---
+    # --- reading (start page, shield dialog) ---
+    def counts(self) -> dict:
+        """How often video ads were handled, per site (start page statistics)."""
+        result = {"twitch": 0, "youtube": 0, "southpark": 0}
+        try:
+            with open(self.log_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            return result
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("kind") not in ("ad-blocked", "ads-removed", "dai-blocked", "masked"):
+                continue
+            site = str(e.get("site", ""))
+            for key in result:
+                if key in site:
+                    result[key] += 1
+        return result
+
     def recent_entries(self, limit: int = 200) -> list[dict]:
         if not os.path.exists(self.log_file):
             return []
