@@ -261,7 +261,7 @@ class AdBlockDialog(QDialog):
 
         entries = self.ad_logger.recent_entries()
         table.setRowCount(len(entries))
-        problem_kinds = {"ad-visible", "manual", "stripped", "masked", "adblock-warning", "backup-failed"}
+        problem_kinds = {"ad-visible", "manual", "stripped", "masked", "stalled", "adblock-warning", "backup-failed"}
         for row, e in enumerate(entries):
             items = [QTableWidgetItem(e.get("time", "")[5:]), QTableWidgetItem(e.get("site", "")),
                      QTableWidgetItem(e.get("summary", "")), QTableWidgetItem(e.get("incident") or "")]

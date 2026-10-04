@@ -24,13 +24,14 @@ MAX_INCIDENTS = 50
 MAX_DETAILS_CHARS = 200_000
 
 # event kinds that get their own incident folder (everything else is only a log line)
-INCIDENT_KINDS = {"ad-visible", "manual", "stripped", "masked", "adblock-warning"}
+INCIDENT_KINDS = {"ad-visible", "manual", "stripped", "masked", "stalled", "adblock-warning"}
 
 KIND_TEXT = {
     "ad-visible": "Werbung lief trotz Blocker",
     "manual": "Von Hand gemeldet",
     "stripped": "Kein werbefreier Ersatz-Stream – Werbung herausgeschnitten (Stream pausiert)",
     "masked": "Werbung abgedeckt und stumm geschaltet",
+    "stalled": "Player hing nach dem Entfernen der Werbung",
     "adblock-warning": "Werbeblocker-Hinweis der Seite entfernt",
     "ad-blocked": "Werbepause abgefangen",
     "ads-removed": "Werbe-Daten entfernt",

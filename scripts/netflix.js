@@ -4,7 +4,8 @@
 //    length of every break). The list is emptied before the player sees it - in JSON.parse results
 //    and fetch().json() results. Without breaks the player has nothing to play.
 // 2. Safety net: if an ad still runs, the player is covered and muted until it is over.
-// 3. Diagnostics for the ad log: which ad fields the data contained (names and counts only).
+// 3. Watchdog: if a title stays at 0:00 after the removal, it is reloaded once without removing.
+// For the ad log: which ad fields the data contained (names and counts only), stalls.
 // Statistics: window.__abNetflix
 (function () {
     'use strict';
@@ -15,8 +16,16 @@
     if (window.__abNetflix) return;
 
     const stats = window.__abNetflix = {
-        dataWithAds: 0, breaksRemoved: 0, adsShown: 0, overlayActive: false, seen: []
+        dataWithAds: 0, breaksRemoved: 0, adsShown: 0, overlayActive: false, seen: [], pruning: true
     };
+    // after a stall (see watchdog below) this page load runs without removing the breaks
+    const NO_PRUNE_KEY = 'abNetflixNoPrune';
+    try {
+        if (sessionStorage.getItem(NO_PRUNE_KEY) === location.pathname) {
+            sessionStorage.removeItem(NO_PRUNE_KEY);
+            stats.pruning = false;
+        }
+    } catch (e) {}
 
     function toHost(kind, details) {
         try {
@@ -41,6 +50,11 @@
         let removed = 0;
         const before = describe(adverts);
         let firstBreak = null;
+        // where the breaks were (seconds into the title) - positions only, for the ad log
+        const positions = Array.isArray(adverts.adBreaks) ? adverts.adBreaks.slice(0, 20).map(function (b) {
+            return b && typeof b === 'object' ? {beiSek: Math.round((b.locationMs || 0) / 1000),
+                                                 dauerSek: b.durationMs != null ? Math.round(b.durationMs / 1000) : null} : null;
+        }) : [];
         AD_LIST_KEYS.forEach(function (k) {
             if (Array.isArray(adverts[k]) && adverts[k].length) {
                 if (k === 'adBreaks') {
@@ -53,10 +67,10 @@
         if (removed) {
             stats.dataWithAds++;
             stats.breaksRemoved += removed;
-            stats.seen.push({pfad: path, felder: before, ersteWerbepause: firstBreak, entfernt: removed});
+            stats.seen.push({pfad: path, felder: before, ersteWerbepause: firstBreak, positionen: positions, entfernt: removed});
             if (stats.seen.length > 5) stats.seen.shift();
             toHost('ads-removed', {summary: removed + ' Werbepause(n) aus den Abspieldaten entfernt', pfad: path,
-                                   felder: before, ersteWerbepause: firstBreak});
+                                   felder: before, ersteWerbepause: firstBreak, positionen: positions});
         }
         return removed;
     }
@@ -83,6 +97,7 @@
     }
 
     function safePrune(obj) {
+        if (!stats.pruning) return;
         try { prune(obj, 'daten', 0); } catch (e) {}
     }
 
@@ -147,7 +162,40 @@
         restoreMuted = null;
     }
 
+    // ---- 3. watchdog: rarely the player waits at 0:00 for the removed ad break ----
+    // Then the title is loaded once more without removing it: the ad plays covered + muted,
+    // and the title starts for sure.
+    let watchStart = 0, watchPath = '';
+
+    function watchdog() {
+        const path = location.pathname;
+        if (!stats.pruning || !stats.breaksRemoved || path.indexOf('/watch/') !== 0) {
+            watchStart = 0;
+            return;
+        }
+        if (path !== watchPath) {
+            watchPath = path;
+            watchStart = Date.now();
+        }
+        const video = document.querySelector('video');
+        if (video && (video.currentTime >= 1 || (video.paused && video.readyState >= 2))) {
+            watchStart = 0;  // playing (or paused by the user): fine for this title
+            watchPath = path;
+            stats.watchdogDone = path;
+            return;
+        }
+        if (stats.watchdogDone === path || !watchStart || Date.now() - watchStart < 15000) return;
+        stats.watchdogDone = path;
+        toHost('stalled', {summary: 'Netflix-Player hing bei 0:00 – ohne Entfernen neu geladen',
+                           video: video ? {t: video.currentTime, pausiert: video.paused, rs: video.readyState,
+                                           gepuffert: video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0} : null,
+                           blocker: {breaksRemoved: stats.breaksRemoved, seen: stats.seen}});
+        try { sessionStorage.setItem(NO_PRUNE_KEY, path); } catch (e) { return; }
+        setTimeout(function () { location.reload(); }, 300);
+    }
+
     setInterval(function () {
+        try { watchdog(); } catch (e) {}
         const root = playerRoot();
         const info = root ? adInfo(root) : null;
         if (info) {

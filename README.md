@@ -36,6 +36,14 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
 - **YouTube ohne Werbung** – die Werbe-Daten (`adPlacements`, `playerAds`, `adSlots`) werden
   aus den Player-Antworten entfernt, bevor der Player sie sieht (`scripts/youtube.js`).
   Werbeblöcke in Startseite/Sidebar und der „Werbeblocker“-Hinweis werden ausgeblendet.
+- **Netflix ohne Werbung** (Abo mit Werbung, `scripts/netflix.js`) – der Player erfährt aus seinen
+  Abspieldaten, wo Werbepausen kommen (`adverts.adBreaks`). Diese Liste wird geleert, bevor der
+  Player sie sieht: Die Sendung startet direkt.
+  - Läuft trotzdem ein Spot („Werbung 1 von 2 • 33“), wird der Player abgedeckt und stumm
+    geschaltet, mit Hinweis und Restzeit.
+  - Absicherung: Bleibt ein Titel nach dem Entfernen länger als 15 s bei 0:00 stehen, lädt der
+    Browser ihn einmal ohne Entfernen neu. Die Werbung läuft dann abgedeckt und stumm, die
+    Sendung startet sicher.
 - **Shield-Dashboard** (Klick auf `🛡️ 14`): Statistik, Ausnahmeliste pro Seite,
   globaler Schalter, Live-Monitor, Filterlisten-Update. Änderungen laden die Seite neu.
 - **Video-Vollbild** – drückt man im Player auf Vollbild, verschwinden Tab-, Adress- und
@@ -102,8 +110,9 @@ Downloads laufen über den eingebauten WebView2-Downloaddialog.
 Der Browser schreibt mit, was bei Video-Werbung passiert – zu sehen im Shield-Dialog unter
 **„Werbe-Protokoll“** (rot = Problem, grün = Blocker hat gegriffen).
 
-- **Automatisch:** Läuft auf YouTube, Twitch oder South Park trotz Blocker eine Werbung, legt der
-  Browser einen Vorfall an.
+- **Automatisch:** Läuft auf YouTube, Twitch, Netflix oder South Park trotz Blocker eine Werbung,
+  legt der Browser einen Vorfall an – ebenso, wenn der Netflix-Player nach dem Entfernen hängen
+  blieb („Player hing nach dem Entfernen der Werbung“).
 - **Von Hand:** Menü ☰ → **„⚠️ Werbung auf dieser Seite melden“** (auch im Shield-Dialog) – für
   jede Seite, auf der dir Werbung auffällt.
 
@@ -156,6 +165,7 @@ adblock-browser-claude/
 │   ├── twitch_main.js    # Twitch: hängt sich in den Video-Worker des Players
 │   ├── twitch_worker.js  # Twitch: Werbe-Playlists erkennen, werbefreien Stream einsetzen
 │   ├── youtube.js        # YouTube: Werbe-Daten entfernen, Fallback, Werbeblöcke ausblenden
+│   ├── netflix.js        # Netflix: Werbepausen aus den Abspieldaten, Abdecken, Hänger-Absicherung
 │   ├── ad_watch.js       # erkennt durchgerutschte Werbung und meldet sie ans Protokoll
 │   └── window_edges.js   # Größe ändern am rechten/unteren Rand über Webseiten
 ├── start_page.py         # GX-Startseite (virtueller Host start.adblockbrowser.example)
@@ -181,4 +191,8 @@ adblock-browser-claude/
   35–45 s). Twitch ändert seinen Player regelmäßig; wenn wieder etwas nicht stimmt: Werbe-Protokoll
   ansehen oder F12 → Konsole → `window.__abTwitch` (`adBreaks`, `replaced`, `masked`,
   `backupTrail`, `errors`). Die Ersatz-Zugänge stehen in `site_scripts.py` (`TWITCH_BACKUP_TYPES`).
+- **Netflix** zeigt nicht bei jedem Start Werbung, getestet wurde vor allem die Werbung vor
+  dem Titel. Werbung mitten im Film war in den Tests nicht zu sehen (auch nach Vorspulen auf
+  20/45/75 min nicht). Falls doch: Werbe-Protokoll ansehen oder F12 → Konsole →
+  `window.__abNetflix` (`breaksRemoved`, `seen` mit den Positionen der Pausen, `adsShown`).
 - Scriptlets (`##+js(...)`) aus den Listen werden nicht ausgeführt.
