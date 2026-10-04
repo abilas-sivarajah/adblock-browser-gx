@@ -105,7 +105,7 @@
             } else if (d.event === 'masked') {
                 stats.masked++;
                 showOverlay(d.endsAt, true);
-                logOnce('masked', {summary: 'Twitch, Kanal ' + channelName(), playlist: adPlaylist,
+                logOnce('masked', {summary: 'Twitch, Kanal ' + channelName() + ' – kein werbefreier Ersatz-Stream', playlist: adPlaylist,
                                    ersatzVersuche: stats.backupTrail.slice(-12), fehler: stats.errors.slice(-10), blocker: stats});
             } else if (d.event === 'backup') {
                 stats.lastBackupType = d.type;

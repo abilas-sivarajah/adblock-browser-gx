@@ -1,5 +1,5 @@
 """
-Site-specific scripts (Twitch, YouTube, ad watch for the ad log) that run at document start.
+Site-specific scripts (Twitch, YouTube, Netflix, ad watch for the ad log) that run at document start.
 The JavaScript lives in scripts/*.js; this module fills in the shield settings, so the
 scripts stay inactive when the blocker is off or the site is on the exception list.
 """
@@ -30,5 +30,6 @@ def build_site_scripts(enabled: bool, whitelist) -> list[str]:
               .replace("__AB_CONFIG__", config)
               .replace("__AB_WORKER_HOOK__", json.dumps(_read("twitch_worker.js"))))
     youtube = _read("youtube.js").replace("__AB_CONFIG__", config)
+    netflix = _read("netflix.js").replace("__AB_CONFIG__", config)
     ad_watch = _read("ad_watch.js").replace("__AB_CONFIG__", config)
-    return [twitch, youtube, ad_watch]
+    return [twitch, youtube, netflix, ad_watch]

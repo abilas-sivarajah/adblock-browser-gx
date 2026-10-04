@@ -30,7 +30,7 @@ KIND_TEXT = {
     "ad-visible": "Werbung lief trotz Blocker",
     "manual": "Von Hand gemeldet",
     "stripped": "Kein werbefreier Ersatz-Stream – Werbung herausgeschnitten (Stream pausiert)",
-    "masked": "Kein werbefreier Ersatz-Stream – Werbung abgedeckt und stumm geschaltet",
+    "masked": "Werbung abgedeckt und stumm geschaltet",
     "adblock-warning": "Werbeblocker-Hinweis der Seite entfernt",
     "ad-blocked": "Werbepause abgefangen",
     "ads-removed": "Werbe-Daten entfernt",
@@ -134,7 +134,7 @@ class AdLogger:
     # --- reading (start page, shield dialog) ---
     def counts(self) -> dict:
         """How often video ads were handled, per site (start page statistics)."""
-        result = {"twitch": 0, "youtube": 0, "southpark": 0}
+        result = {"twitch": 0, "youtube": 0, "southpark": 0, "netflix": 0}
         try:
             with open(self.log_file, "r", encoding="utf-8") as f:
                 lines = f.readlines()

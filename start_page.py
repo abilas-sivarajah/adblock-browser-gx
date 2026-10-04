@@ -244,7 +244,7 @@ body {
         <div class="stat cut one"><div class="k gx">ENGINE</div><div class="v ok gx">&#9679; Brave Rust-Engine</div>
             <div class="chips"><span class="chip">EasyList</span><span class="chip">EasyPrivacy</span><span class="chip">EasyList DE</span><span class="chip">Peter Lowe</span></div></div>
     </div>
-    <div class="foot">AdBlock Browser GX &middot; Twitch &middot; YouTube &middot; South Park ohne Werbung</div>
+    <div class="foot">AdBlock Browser GX &middot; Twitch &middot; YouTube &middot; South Park &middot; Netflix</div>
 </div>
 
 <div class="modal" id="modal">
@@ -369,9 +369,9 @@ function countUp(el, target) {
 }
 countUp(document.getElementById('total'), STATS.total || 0);
 const v = STATS.video || {};
-countUp(document.getElementById('video'), (v.twitch || 0) + (v.youtube || 0) + (v.southpark || 0));
+countUp(document.getElementById('video'), (v.twitch || 0) + (v.youtube || 0) + (v.southpark || 0) + (v.netflix || 0));
 document.getElementById('videoChips').innerHTML =
-    `<span class="chip">Twitch <b>${v.twitch || 0}</b></span><span class="chip">YouTube <b>${v.youtube || 0}</b></span><span class="chip">South Park <b>${v.southpark || 0}</b></span>`;
+    `<span class="chip">Twitch <b>${v.twitch || 0}</b></span><span class="chip">YouTube <b>${v.youtube || 0}</b></span><span class="chip">South Park <b>${v.southpark || 0}</b></span><span class="chip">Netflix <b>${v.netflix || 0}</b></span>`;
 
 if (document.body.classList.contains('anim')) {
     const box = document.getElementById('embers');
