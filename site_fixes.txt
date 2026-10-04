@@ -1,0 +1,24 @@
+! Title: AdBlock Browser - Seiten-Fixes
+! Wird zusaetzlich zu EasyList & Co. geladen (normale Adblock-Syntax).
+! Hier stehen Ausnahmen fuer Dinge, die die grossen Listen faelschlich blockieren,
+! und Regeln fuer Werbung, die die grossen Listen nicht erwischen.
+
+! ---------------------------------------------------------------------------
+! South Park (southpark.de) - Paramount "AVIA"-Player
+! ---------------------------------------------------------------------------
+! Die Werbung wird per Google DAI serverseitig in den HLS-Stream eingeschnitten
+! (Werbesegmente von googlevideo.com zwischen den Folgen-Segmenten). Blockiert man
+! die DAI-Stream-Anfrage, faellt der Player auf "stitchedstream.source" aus
+! mica.json zurueck - das ist der Original-Stream ohne Werbung.
+||dai.google.com/ondemand/hls/content/*/streams$domain=southpark.de
+
+! Ohne das IMA-DAI-SDK startet der Player gar nicht (EasyList blockt imasdk.googleapis.com).
+@@||imasdk.googleapis.com/js/sdkloader/ima3_dai.js$script,domain=southpark.de
+@@||imasdk.googleapis.com/js/core/dai_iframe$domain=southpark.de
+! Doppler = Player-Konfiguration/CDN-Auswahl (EasyPrivacy blockt sie, dann bleibt der Player schwarz).
+@@||doppler-config.cbsivideo.com^$script,xmlhttprequest,domain=southpark.de
+! Tealium-Tag-Manager: der Player wartet auf utag.js und startet sonst nicht
+! (die Tracker, die utag nachlaedt, blocken die Listen weiterhin).
+@@||tags.tiqcdn.com/utag/cbsi/$script,domain=southpark.de
+! Akamai Bot-Schutz - blockiert man ihn, verweigert die Seite u. U. API-Antworten.
+@@||www.southpark.de/akam/$domain=southpark.de

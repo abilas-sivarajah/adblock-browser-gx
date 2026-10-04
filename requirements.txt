@@ -1,0 +1,7 @@
+PyQt6>=6.6.0
+adblock>=0.6.0
+# liefert die WebView2-.NET-Assemblies (Microsoft.Web.WebView2.*.dll)
+pywebview>=6.2.0
+pythonnet>=3.2.0
+# nur fuer create_shortcut.py
+pywin32>=306

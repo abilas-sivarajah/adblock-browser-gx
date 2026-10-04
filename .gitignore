@@ -1,0 +1,4 @@
+# Profil, Cache, Protokolle, Einstellungen (lokal, privat)
+browser_data/
+__pycache__/
+*.pyc
