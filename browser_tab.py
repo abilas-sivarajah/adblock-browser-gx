@@ -71,10 +71,12 @@ class BrowserTab(QWidget):
     close_requested = pyqtSignal()
     favicon_changed = pyqtSignal(QIcon)        # empty QIcon = no favicon
     audio_changed = pyqtSignal(bool, bool)     # playing, muted
+    edge_resize_requested = pyqtSignal(str)    # 'right' | 'bottom' | 'corner' (scripts/window_edges.js)
 
     def __init__(self, filter_engine, parent=None, ad_logger=None, start_page_writer=None):
         super().__init__(parent)
         self.start_page_writer = start_page_writer  # writes the themed start page (MainWindow)
+        self.window_resizable = True
         self.filter_engine = filter_engine
         self.ad_logger = ad_logger
         # last network requests of this tab, written into ad-log incidents
@@ -206,6 +208,10 @@ class BrowserTab(QWidget):
         # Element hiding: page reports its classes/ids, we answer with CSS
         core.WebMessageReceived += self.on_web_message
         core.AddScriptToExecuteOnDocumentCreatedAsync(COSMETIC_BRIDGE_SCRIPT)
+        # resize strips at the window edge over the page
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts", "window_edges.js"),
+                  encoding="utf-8") as f:
+            core.AddScriptToExecuteOnDocumentCreatedAsync(f.read())
         # Twitch / YouTube video-ad scripts
         self.refresh_site_scripts()
 
@@ -282,8 +288,6 @@ class BrowserTab(QWidget):
 
     def on_web_message(self, sender, args):
         source = args.Source
-        if not source.startswith(("http://", "https://")) or is_start_page(source):
-            return
         try:
             msg = json.loads(args.WebMessageAsJson)
         except ValueError:
@@ -292,6 +296,16 @@ class BrowserTab(QWidget):
             return
 
         kind = msg.get("type")
+        # window edge strips work on every page, the start page included
+        if kind == "adblock-edge":
+            self.edge_resize_requested.emit(str(msg.get("edge", "")))
+            return
+        if kind == "adblock-edges-hello":
+            self._post_frame_state()
+            return
+        if not source.startswith(("http://", "https://")) or is_start_page(source):
+            return
+
         if kind == "adblock-init":
             self._cosmetic = self.filter_engine.get_cosmetic_rules(source)
             self._post_css(build_cosmetic_css(self._cosmetic["hide_selectors"],
@@ -367,6 +381,15 @@ class BrowserTab(QWidget):
             else:
                 QTimer.singleShot(100, finish)
         QTimer.singleShot(100, finish)
+
+    def set_window_resizable(self, resizable: bool):
+        self.window_resizable = bool(resizable)
+        self._post_frame_state()
+
+    def _post_frame_state(self):
+        if self.is_ready:
+            self.wv.CoreWebView2.PostWebMessageAsJson(json.dumps({"type": "adblock-frame",
+                                                                  "resizable": self.window_resizable}))
 
     def _post_css(self, css: str):
         if css and self.is_ready:

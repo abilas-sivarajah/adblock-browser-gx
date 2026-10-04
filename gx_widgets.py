@@ -153,7 +153,8 @@ class TitleBar(QWidget):
         lay.addWidget(self.logo)
 
         self.tab_bar = GXTabBar(self)
-        lay.addWidget(self.tab_bar)
+        # tabs sit on the bottom edge, so the selected one merges into the navigation bar
+        lay.addWidget(self.tab_bar, 0, Qt.AlignmentFlag.AlignBottom)
 
         self.btn_new = QToolButton(self)
         self.btn_new.setObjectName("newTabBtn")
@@ -190,6 +191,19 @@ class TitleBar(QWidget):
         self.btn_max.setIcon(icons.icon("restore" if maximized else "max", theme.MUTED, 16, theme.TEXT))
         self.btn_max.setToolTip("Wiederherstellen" if maximized else "Maximieren")
 
+    def is_drag_area(self, pos: QPoint) -> bool:
+        """True where the title bar is empty (window caption for Windows: drag, snap,
+        double-click maximise, system menu); False on tabs and buttons."""
+        if not self.rect().contains(pos):
+            return False
+        child = self.childAt(pos)
+        if child is None:
+            return True
+        if child is self.tab_bar:
+            return self.tab_bar.tabAt(self.tab_bar.mapFrom(self, pos)) < 0
+        return False
+
+    # fallback when the window manager does not ask for the caption (non-Windows)
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             start_move(self)

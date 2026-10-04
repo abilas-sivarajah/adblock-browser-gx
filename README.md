@@ -47,8 +47,11 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
 
 Gamer-Look im Stil von Opera GX – dunkle Flächen, eine Neon-Akzentfarbe, Schrift Bahnschrift.
 
-- **Eigene Titelleiste** mit den Tabs (rahmenloses Fenster): oben ziehen = verschieben (Aero Snap),
-  Doppelklick = maximieren, an den Rändern ziehen = Größe ändern.
+- **Eigene Titelleiste** mit den Tabs, ohne sichtbaren Rahmen – intern ein echtes Windows-Fenster
+  (`native_frame.py`): Fenster **nach oben an den Bildschirmrand ziehen = maximieren**, an die Seite =
+  Bildschirmhälfte (Aero Snap), aus dem maximierten Zustand wegziehen = wiederherstellen,
+  Doppelklick auf die leere Titelleiste = maximieren, Rechtsklick = Systemmenü. Größe ändern an allen
+  Rändern (über Webseiten per unsichtbarem Streifen, `scripts/window_edges.js`).
 - **Tabs** mit Favicon, **Lautsprecher-Symbol** wenn ein Tab Ton abspielt (Klick = stumm),
   Mittelklick schließt, Rechtsklick: neu laden, duplizieren, stummschalten, andere schließen.
 - **Seitenleiste:** Startseite, Twitch, YouTube, Discord (öffnet oder springt zum vorhandenen Tab),
@@ -139,6 +142,7 @@ adblock-browser-claude/
 ├── main.py               # Einstiegspunkt
 ├── main_window.py        # Hauptfenster (rahmenlos), Tabs, Navigation, Vollbild, Tastenkürzel
 ├── gx_widgets.py         # Titelleiste mit Tabs, Fensterknöpfe, Seitenleiste
+├── native_frame.py       # Windows-Rahmen: Aero Snap, Schatten, runde Ecken, Treffer-Test
 ├── theme.py              # GX-Farben, Akzentfarben, Stylesheet, Design-Einstellungen
 ├── icons.py              # Linien-Icons (SVG) in beliebiger Farbe
 ├── design_dialog.py      # GX Control (Akzentfarbe, Seitenleiste, Animation)
@@ -152,7 +156,8 @@ adblock-browser-claude/
 │   ├── twitch_main.js    # Twitch: hängt sich in den Video-Worker des Players
 │   ├── twitch_worker.js  # Twitch: Werbe-Playlists erkennen, werbefreien Stream einsetzen
 │   ├── youtube.js        # YouTube: Werbe-Daten entfernen, Fallback, Werbeblöcke ausblenden
-│   └── ad_watch.js       # erkennt durchgerutschte Werbung und meldet sie ans Protokoll
+│   ├── ad_watch.js       # erkennt durchgerutschte Werbung und meldet sie ans Protokoll
+│   └── window_edges.js   # Größe ändern am rechten/unteren Rand über Webseiten
 ├── start_page.py         # GX-Startseite (virtueller Host start.adblockbrowser.example)
 ├── bookmarks_history.py  # Lesezeichen & Verlauf (JSON)
 ├── adblock_dialog.py     # Shield-Dashboard

@@ -98,15 +98,17 @@ QTabBar#tabBar {{ background: transparent; border: none; }}
 QTabBar#tabBar::tab {{
     background: transparent; color: {MUTED};
     font-family: {FONT_GX}; font-size: 13px;
-    height: 32px; min-width: 110px; max-width: 230px;
+    height: 34px; min-width: 110px; max-width: 230px;
     padding: 0 6px 0 12px; margin: 6px 3px 0 0;
     border-top-left-radius: 10px; border-top-right-radius: 10px;
     border: none;
 }}
 QTabBar#tabBar::tab:hover:!selected {{ background: {BG2}; color: {TEXT}; }}
+/* selected tab: same colour as the navigation bar below (seamless), accent cap clipped by the
+   rounded corners - a border-top would curve down the sides */
 QTabBar#tabBar::tab:selected {{
-    background: {BG1}; color: {TEXT};
-    border-top: 2px solid {A};
+    color: {TEXT};
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {A}, stop:0.058 {A}, stop:0.059 {BG1}, stop:1 {BG1});
 }}
 QTabBar#tabBar::close-button {{
     image: url({icon_path("x", DIM)}); subcontrol-position: right; margin: 2px;

@@ -9,13 +9,15 @@ import re
 import time
 import urllib.parse
 
-from PyQt6.QtCore import QEvent, QSize, Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QIcon, QKeySequence, QShortcut
+from PyQt6 import sip
+from PyQt6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QCursor, QGuiApplication, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLineEdit, QMainWindow,
                              QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget, QTabBar,
                              QToolButton, QVBoxLayout, QWidget)
 
 import icons
+import native_frame
 import theme
 from ad_logger import AdLogger
 from adblock_dialog import AdBlockDialog
@@ -28,7 +30,7 @@ from history_dialog import HistoryDialog
 from start_page import write_start_page
 
 APP_NAME = "AdBlock Browser GX"
-RESIZE_MARGIN = 5
+EDGE = 6  # px at the window border that resize the window (inside the window, nothing visible)
 
 # sidebar shortcuts: open the site, or switch to a tab that already shows it
 SITE_SHORTCUTS = {
@@ -36,28 +38,6 @@ SITE_SHORTCUTS = {
     "youtube": ("youtube.com", "https://www.youtube.com"),
     "discord": ("discord.com", "https://discord.com/app"),
 }
-
-
-class ResizeGrip(QWidget):
-    """Invisible strip/corner at the window edge of the frameless window."""
-    CURSORS = {
-        Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor, Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
-        Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor, Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
-    }
-
-    def __init__(self, parent, edges):
-        super().__init__(parent)
-        self.edges = edges
-        if edges in self.CURSORS:
-            self.setCursor(self.CURSORS[edges])
-        elif edges in (Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.Edge.RightEdge | Qt.Edge.BottomEdge):
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        else:
-            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton and self.window().windowHandle():
-            self.window().windowHandle().startSystemResize(self.edges)
 
 
 class MainWindow(QMainWindow):
@@ -199,12 +179,6 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.on_current_tab_changed)
         self.tabs.tabCloseRequested.connect(self.close_tab)
 
-        # frameless window: resize grips around the edge
-        self.grips = [ResizeGrip(self, e) for e in (
-            Qt.Edge.LeftEdge, Qt.Edge.RightEdge, Qt.Edge.TopEdge, Qt.Edge.BottomEdge,
-            Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.Edge.RightEdge | Qt.Edge.TopEdge,
-            Qt.Edge.LeftEdge | Qt.Edge.BottomEdge, Qt.Edge.RightEdge | Qt.Edge.BottomEdge)]
-        self._update_frame()
 
     def _nav_button(self, tip, slot):
         b = QToolButton(self)
@@ -249,49 +223,113 @@ class MainWindow(QMainWindow):
         write_start_page(folder, self.filter_engine.total_blocked, self.ui["accent"],
                          self.ad_logger.counts(), bool(self.ui["animations"]))
 
-    # ------------------------------------------------------------------ frameless window
-    def _update_frame(self):
-        plain = self.isMaximized() or self.isFullScreen()
-        m = 0 if plain else RESIZE_MARGIN
-        self.setContentsMargins(m, m, m, m)
-        for g in self.grips:
-            g.setVisible(not plain)
-        self._place_grips()
+    # ------------------------------------------------------------------ window frame (Windows)
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._apply_native_frame()
 
-    def _place_grips(self):
-        w, h, m, c = self.width(), self.height(), RESIZE_MARGIN, RESIZE_MARGIN * 3
-        geo = [(0, c, m, h - 2 * c), (w - m, c, m, h - 2 * c), (c, 0, w - 2 * c, m), (c, h - m, w - 2 * c, m),
-               (0, 0, c, m), (w - c, 0, c, m), (0, h - m, c, m), (w - c, h - m, c, m)]
-        for g, (x, y, gw, gh) in zip(self.grips, geo):
-            g.setGeometry(x, y, gw, gh)
-            g.raise_()
+    def _apply_native_frame(self):
+        try:
+            native_frame.apply(int(self.winId()))
+        except Exception:
+            pass
+
+    def nativeEvent(self, event_type, message):
+        if bytes(event_type) == b"windows_generic_MSG":
+            msg = native_frame.message(int(message))
+            if msg.message == native_frame.WM_NCCALCSIZE:
+                return True, sip.voidptr(0)  # nothing of the native frame is drawn: all client area
+            if msg.message == native_frame.WM_NCHITTEST:
+                hit = self._hit_test(msg.lParam)
+                if hit:
+                    return True, sip.voidptr(hit)  # PyQt6 wants the LRESULT as voidptr
+        # not handled. (Calling the base class from Python crashes PyQt6 6.11 - and
+        # QWidget::nativeEvent only returns false anyway.)
+        return False, sip.voidptr(0)
+
+    def _hit_test(self, lparam) -> int:
+        """Tells Windows where the borders and the caption (empty title bar) are."""
+        if self.isFullScreen():
+            return 0
+        x, y = native_frame.lparam_point(lparam)
+        if not self.isMaximized():
+            r = native_frame.window_rect(int(self.winId()))
+            b = round(EDGE * self.devicePixelRatioF())
+            left, right = x < r.left + b, x >= r.right - b
+            top, bottom = y < r.top + b, y >= r.bottom - b
+            if top or bottom or left or right:
+                return {(True, False, True, False): native_frame.HTTOPLEFT,
+                        (True, False, False, True): native_frame.HTTOPRIGHT,
+                        (False, True, True, False): native_frame.HTBOTTOMLEFT,
+                        (False, True, False, True): native_frame.HTBOTTOMRIGHT,
+                        (True, False, False, False): native_frame.HTTOP,
+                        (False, True, False, False): native_frame.HTBOTTOM,
+                        (False, False, True, False): native_frame.HTLEFT,
+                        (False, False, False, True): native_frame.HTRIGHT}.get((top, bottom, left, right), 0)
+        if self.title_bar.isVisible():
+            if self.title_bar.is_drag_area(self.title_bar.mapFromGlobal(self._logical_point(x, y))):
+                return native_frame.HTCAPTION
+        return 0
+
+    def _logical_point(self, x: int, y: int) -> QPoint:
+        """Physical screen pixels -> Qt coordinates (Qt keeps each screen's native origin)."""
+        for screen in QGuiApplication.screens():
+            g, r = screen.geometry(), screen.devicePixelRatio()
+            if g.x() <= x < g.x() + g.width() * r and g.y() <= y < g.y() + g.height() * r:
+                return QPoint(int(g.x() + (x - g.x()) / r), int(g.y() + (y - g.y()) / r))
+        r = self.devicePixelRatioF()
+        return QPoint(int(x / r), int(y / r))
+
+    def changeEvent(self, e):
+        super().changeEvent(e)
+        if e.type() == QEvent.Type.WindowStateChange:
+            QTimer.singleShot(0, self._after_state_change)
+
+    def _after_state_change(self):
+        if not self.isFullScreen():
+            self._apply_native_frame()  # Qt replaces the window styles while in fullscreen
+        self._fit_maximized()
+        self.title_bar.update_max_icon()
+        self._broadcast_resizable()
+
+    def _fit_maximized(self):
+        """Maximised, the (invisible) frame reaches past the screen edge - keep content inside."""
+        if self.isMaximized() and not self.isFullScreen():
+            dpr = self.devicePixelRatioF()
+            l, t, r, b = (round(v / dpr) for v in native_frame.maximized_overhang(int(self.winId())))
+            self.setContentsMargins(l, t, r, b)
+        else:
+            self.setContentsMargins(0, 0, 0, 0)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        self._place_grips()
+        if self.isMaximized():
+            self._fit_maximized()
 
-    def changeEvent(self, e):
-        if e.type() == QEvent.Type.WindowStateChange:
-            self._update_frame()
-            self.title_bar.update_max_icon()
-        super().changeEvent(e)
+    def _resizable(self) -> bool:
+        return not (self.isMaximized() or self.isFullScreen() or self._page_fullscreen_tab is not None)
 
-    def showEvent(self, e):
-        super().showEvent(e)
-        self._native_window_style()
+    def _broadcast_resizable(self):
+        for i in range(self.tabs.count()):
+            self.tabs.widget(i).set_window_resizable(self._resizable())
 
-    def _native_window_style(self):
-        """Taskbar click minimises/restores, Windows 11 rounds the corners."""
-        try:
-            hwnd = int(self.winId())
-            user32 = ctypes.windll.user32
-            GWL_STYLE, WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX = -16, 0x00080000, 0x00020000, 0x00010000
-            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-            user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
-            pref = ctypes.c_int(2)  # DWMWCP_ROUND
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref))
-        except Exception:
-            pass
+    def start_edge_resize(self, edge: str):
+        """A page reported a press on its right/bottom edge strip (scripts/window_edges.js)."""
+        handle = self.windowHandle()
+        if not self._resizable() or handle is None:
+            return
+        # pages could post this message themselves: only act when the cursor really is at the edge
+        pos, g = QCursor.pos(), self.frameGeometry()
+        edges = []
+        if edge in ("right", "corner") and 0 <= g.right() - pos.x() <= 16:
+            edges.append(Qt.Edge.RightEdge)
+        if edge in ("bottom", "corner") and 0 <= g.bottom() - pos.y() <= 16:
+            edges.append(Qt.Edge.BottomEdge)
+        if edges:
+            combined = edges[0]
+            for e in edges[1:]:
+                combined |= e
+            handle.startSystemResize(combined)
 
     # ------------------------------------------------------------------ shortcuts
     def setup_shortcuts(self):
@@ -333,6 +371,8 @@ class MainWindow(QMainWindow):
         tab.close_requested.connect(lambda: self.close_tab(self.tabs.indexOf(tab)))
         tab.favicon_changed.connect(lambda ic: self.on_tab_favicon(tab, ic))
         tab.audio_changed.connect(lambda playing, muted: self.on_tab_audio(tab, playing, muted))
+        tab.edge_resize_requested.connect(self.start_edge_resize)
+        tab.set_window_resizable(self._resizable())
         tab.favicon = QIcon()
         tab.audio_state = (False, False)
 
@@ -718,6 +758,7 @@ class MainWindow(QMainWindow):
             if not self._was_fullscreen and not self._hidden_test_mode:
                 self._was_maximized = self.isMaximized()
                 self.showFullScreen()
+            self._broadcast_resizable()
         else:
             if self._page_fullscreen_tab is not tab:
                 return
@@ -726,6 +767,7 @@ class MainWindow(QMainWindow):
                 w.setVisible(visible)
             if not self._was_fullscreen and not self._hidden_test_mode:
                 self.showMaximized() if self._was_maximized else self.showNormal()
+            self._broadcast_resizable()
 
     def handle_shortcut(self, action: str):
         """Shortcuts reported by a tab while the web page has keyboard focus."""
