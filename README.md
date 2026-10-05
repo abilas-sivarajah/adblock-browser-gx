@@ -177,6 +177,7 @@ adblock-browser-claude/
 ├── adblock_dialog.py     # Shield-Dashboard
 ├── history_dialog.py     # Verlaufsdialog
 ├── create_shortcut.py    # Desktop-Verknüpfung
+├── dev_tests/            # Testskripte (unsichtbarer Browser, Offline-Tests) – siehe dev_tests/README.md
 ├── assets/screenshots/   # Vorschaubilder für diese README
 └── browser_data/         # Profil, Filterlisten, Einstellungen, ui_settings.json (automatisch angelegt)
 ```

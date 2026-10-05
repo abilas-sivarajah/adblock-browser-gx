@@ -3,3 +3,5 @@ browser_data/
 __pycache__/
 *.pyc
 testdata/
+# Ausgaben der Testskripte (Logs, Screenshots)
+dev_tests/out/
