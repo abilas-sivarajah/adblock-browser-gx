@@ -5,7 +5,7 @@ import win32com.client
 def create_desktop_shortcut():
     shell = win32com.client.Dispatch('WScript.Shell')
     desktop = shell.SpecialFolders('Desktop')  # real desktop, also when redirected (e.g. OneDrive)
-    shortcut_path = os.path.join(desktop, 'AdBlock Browser (Claude).lnk')
+    shortcut_path = os.path.join(desktop, 'AdBlock Browser.lnk')
 
     python_dir = os.path.dirname(sys.executable)
     pythonw = os.path.join(python_dir, 'pythonw.exe')

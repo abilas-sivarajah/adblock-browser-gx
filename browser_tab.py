@@ -73,9 +73,11 @@ class BrowserTab(QWidget):
     audio_changed = pyqtSignal(bool, bool)     # playing, muted
     edge_resize_requested = pyqtSignal(str)    # 'right' | 'bottom' | 'corner' (scripts/window_edges.js)
 
-    def __init__(self, filter_engine, parent=None, ad_logger=None, start_page_writer=None):
+    def __init__(self, filter_engine, parent=None, ad_logger=None, start_page_writer=None, hw_accel=True):
         super().__init__(parent)
         self.start_page_writer = start_page_writer  # writes the themed start page (MainWindow)
+        # fixed per session: all tabs share one WebView2 profile and must use the same browser arguments
+        self.hw_accel = hw_accel
         self.window_resizable = True
         self.filter_engine = filter_engine
         self.ad_logger = ad_logger
@@ -120,6 +122,17 @@ class BrowserTab(QWidget):
             browser_args += ["--mute-audio", "--disable-renderer-backgrounding",
                              "--disable-backgrounding-occluded-windows",
                              "--disable-features=CalculateNativeWinOcclusion"]
+
+        if not self.hw_accel:
+            # Discord streaming mode: without GPU video overlays, DRM videos (Netflix etc.)
+            # no longer show up black in screen captures
+            browser_args += [
+                "--disable-gpu",
+                "--disable-gpu-compositing",
+                "--disable-accelerated-video-decode",
+                "--disable-direct-composition-video-overlays",
+            ]
+
         if browser_args:
             props.AdditionalBrowserArguments = " ".join(browser_args)
 

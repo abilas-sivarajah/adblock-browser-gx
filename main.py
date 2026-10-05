@@ -24,7 +24,18 @@ def get_app_data_dir() -> str:
     return data_dir
 
 def main():
-    # Enable hardware acceleration and modern web features
+    # GPU flags override the saved setting for this session only (Discord streaming mode)
+    initial_url = None
+    hw_accel = None
+    for arg in sys.argv[1:]:
+        arg_lower = arg.lower()
+        if arg_lower in ("--discord", "--discord-mode", "--disable-gpu", "--no-gpu"):
+            hw_accel = False
+        elif arg_lower in ("--enable-gpu", "--gpu"):
+            hw_accel = True
+        elif not arg.startswith("-") and initial_url is None:
+            initial_url = arg
+
     app = QApplication(sys.argv)
     app.setApplicationName("AdBlock Browser")
     app.setApplicationDisplayName("AdBlock Browser")
@@ -36,8 +47,7 @@ def main():
         app.setWindowIcon(QIcon(icon_path))
 
     data_dir = get_app_data_dir()
-    initial_url = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else None
-    window = MainWindow(data_dir, initial_url=initial_url)
+    window = MainWindow(data_dir, initial_url=initial_url, hw_accel=hw_accel)
     if os.environ.get("ADBLOCK_HIDDEN_WINDOW"):
         # Test mode: off-screen, no focus, no taskbar entry (does not disturb fullscreen apps/games)
         window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)

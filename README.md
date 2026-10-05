@@ -6,7 +6,7 @@ Desktop-Browser für Windows: **PyQt6**-Oberfläche, **Microsoft Edge WebView2**
 (per pythonnet eingebettet) und die **Brave AdBlock Rust-Engine** (`adblock`) als Werbeblocker.
 
 Projektordner: `C:\AdBlockBrowser`. Diese Variante basiert auf dem Antigravity-Projekt
-`C:\Users\abila\.gemini\antigravity\scratch\adblock-browser` und lässt das Original unverändert.
+`adblock-browser` und lässt das Original unverändert.
 Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht geteilt.
 
 ---
@@ -49,6 +49,15 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
     Die Anzeige wird aus der Antwort entfernt – wie wenn keine gebucht wäre. Man sieht den normalen
     Pausenbildschirm („Sie sehen gerade …“). Kommt doch eine durch, wird der Werbe-Dialog
     unsichtbar gemacht (Leertaste spielt weiter) und ein Vorfall angelegt.
+- **Discord-Streaming / Screen-Sharing (Netflix Fix)** – Wenn man Netflix, Prime Video
+  oder Disney+ über Discord überträgt, bleibt das Videobild für Freunde normalerweise schwarz
+  (DRM-Schutz über Hardware-Overlays). Der Browser bietet einen **Discord-Stream-Modus**:
+  - Hardware-Beschleunigung kann in **GX Control** oder im **Hauptmenü** mit 1 Klick deaktiviert werden.
+  - Alternativ per **`start_browser_discord.bat`** oder Parameter `python main.py --discord` starten
+    (gilt nur für diese Sitzung, die gespeicherte Einstellung bleibt unverändert).
+  - Das Video wird ohne geschütztes DirectComposition-Overlay gerendert und ist im Discord-Stream
+    für alle Freunde sichtbar. Ohne Hardware-DRM liefern die Dienste evtl. eine geringere Auflösung.
+  - Nach dem Umschalten startet der Browser neu und öffnet die aktuelle Seite wieder.
 - **Shield-Dashboard** (Klick auf `🛡️ 14`): Statistik, Ausnahmeliste pro Seite,
   globaler Schalter, Live-Monitor, Filterlisten-Update. Änderungen laden die Seite neu.
 - **Video-Vollbild** – drückt man im Player auf Vollbild, verschwinden Tab-, Adress- und
@@ -82,14 +91,15 @@ Gamer-Look im Stil von Opera GX – dunkle Flächen, eine Neon-Akzentfarbe, Schr
 
 ## 🚀 Starten
 
-Doppelklick auf **`start_browser.bat`** oder:
+Doppelklick auf **`start_browser.bat`** (oder **`start_browser_discord.bat`** für Discord-Stream) oder:
 
 ```powershell
 python main.py
+python main.py --discord           # Discord-Streaming-Modus (Netflix ohne schwarzen Bildschirm)
 python main.py https://www.southpark.de
 ```
 
-Desktop-Verknüpfung „AdBlock Browser (Claude)“ anlegen: `python create_shortcut.py`
+Desktop-Verknüpfung „AdBlock Browser“ anlegen: `python create_shortcut.py`
 
 ## ⌨️ Tastenkombinationen
 

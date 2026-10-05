@@ -6,11 +6,12 @@ navigation bar and the Microsoft Edge WebView2 pages (BrowserTab) underneath.
 import ctypes
 import os
 import re
+import sys
 import time
 import urllib.parse
 
 from PyQt6 import sip
-from PyQt6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
+from PyQt6.QtCore import QEvent, QPoint, QProcess, QSize, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QCursor, QGuiApplication, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayout, QLineEdit, QMainWindow,
                              QMenu, QMessageBox, QProgressBar, QPushButton, QStackedWidget, QTabBar,
@@ -41,7 +42,7 @@ SITE_SHORTCUTS = {
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, data_dir: str, initial_url: str = None):
+    def __init__(self, data_dir: str, initial_url: str = None, hw_accel: bool = None):
         super().__init__()
         self.data_dir = data_dir
         self.setWindowTitle(APP_NAME)
@@ -67,6 +68,8 @@ class MainWindow(QMainWindow):
         self.ad_logger = AdLogger(data_dir)
         self.ad_logger.environment.update(self._environment_info())
         self.ui = theme.UISettings(data_dir)
+        # GPU mode of this session (command-line flag or saved setting); a changed setting needs a restart
+        self.hw_accel = bool(self.ui["hardware_acceleration"] if hw_accel is None else hw_accel)
         self.icon_files = icons.IconFiles(os.path.join(data_dir, "ui_cache", "icons"))
 
         self.setup_ui()
@@ -359,7 +362,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ tabs
     def open_new_tab(self, url: str = None) -> BrowserTab:
-        tab = BrowserTab(self.filter_engine, self, ad_logger=self.ad_logger, start_page_writer=self.write_start_page)
+        tab = BrowserTab(self.filter_engine, self, ad_logger=self.ad_logger, start_page_writer=self.write_start_page,
+                         hw_accel=self.hw_accel)
 
         tab.title_changed.connect(lambda t: self.on_tab_title_changed(tab, t))
         tab.url_changed.connect(lambda u: self.on_tab_url_changed(tab, u))
@@ -713,7 +717,43 @@ class MainWindow(QMainWindow):
             self.update_shield_badge(tab.blocked_count)
 
     def open_design_dialog(self):
-        DesignDialog(self.ui, self.on_design_changed, self).exec()
+        dlg = DesignDialog(self.ui, self.on_design_changed, self, hw_accel_active=self.hw_accel)
+        dlg.exec()
+        if dlg.restart_now:
+            self.restart_browser()
+        elif dlg.hw_accel_changed() and bool(self.ui["hardware_acceleration"]) != self.hw_accel:
+            self.offer_restart("Browser-Neustart erforderlich",
+                               "Die Änderung der Hardware-Beschleunigung wird erst nach einem Neustart wirksam.")
+
+    def toggle_discord_stream_mode(self):
+        # switches the mode of the running session, which only takes effect after a restart
+        new_hw = not self.hw_accel
+        self.ui.set("hardware_acceleration", new_hw)
+        status = ("aktiviert (maximale GPU-Leistung)" if new_hw else
+                  "deaktiviert (Discord-Stream-Modus – Netflix im Stream sichtbar)")
+        self.offer_restart("Hardware-Beschleunigung geändert",
+                           f"Die Hardware-Beschleunigung wird {status}.\n\n"
+                           "Damit die Änderung wirksam wird, muss der Browser neu gestartet werden.")
+
+    def offer_restart(self, title: str, text: str):
+        reply = QMessageBox.question(self, title, text + "\n\nMöchtest du den Browser jetzt neu starten?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.Yes)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.restart_browser()
+
+    def restart_browser(self):
+        """New instance with the current page; command-line GPU flags are dropped, the saved setting applies."""
+        tab = self.get_current_tab()
+        url = tab.current_url_str if tab else ""
+        args = [os.path.abspath(sys.argv[0])]
+        if url.startswith(("http://", "https://")):
+            args.append(url)
+        app = QApplication.instance()
+        # start it only after this instance has shut down its tabs and released the WebView2 profile
+        app.aboutToQuit.connect(lambda: QProcess.startDetached(sys.executable, args))
+        self.close()
+        app.quit()
 
     def open_history_dialog(self):
         dlg = HistoryDialog(self.bm_manager, self)
@@ -829,7 +869,10 @@ class MainWindow(QMainWindow):
         m.addAction(ic("code"), "Entwicklertools\tF12", self.open_devtools)
         m.addAction(ic("fullscreen"), "Vollbildmodus\tF11", self.toggle_fullscreen)
         m.addSeparator()
-        m.addAction(icons.icon("palette", self.ui["accent"], 16), "GX Control – Design", self.open_design_dialog)
+        m.addAction(icons.icon("palette", self.ui["accent"], 16), "GX Control – Design & System", self.open_design_dialog)
+        stream_txt = "Discord-Stream-Modus (Netflix Fix)" + (" [Aktiv]" if not self.hw_accel else "")
+        m.addAction(icons.icon("discord", self.ui["accent"] if not self.hw_accel else theme.MUTED, 16),
+                    stream_txt, self.toggle_discord_stream_mode)
         m.addAction(icons.icon("shield", self.ui["accent"], 16), "AdBlock Shield", lambda: self.open_shield_dialog())
         m.addAction(ic("alert"), "Werbung auf dieser Seite melden", self.report_ad)
         m.addAction(ic("info"), "Über AdBlock Browser GX", self.show_about_dialog)

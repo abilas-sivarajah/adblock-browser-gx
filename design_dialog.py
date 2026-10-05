@@ -1,22 +1,26 @@
 """
-GX Control: accent colour and layout switches. Every change is applied immediately.
+GX Control: accent colour and layout switches. Every change is applied immediately,
+except hardware acceleration (WebView2 browser arguments), which needs a restart.
 """
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-                             QPushButton, QToolButton, QVBoxLayout)
+                             QPushButton, QToolButton, QVBoxLayout, QWidget)
 
 import icons
 import theme
 
 
 class DesignDialog(QDialog):
-    def __init__(self, settings: theme.UISettings, on_change, parent=None):
+    def __init__(self, settings: theme.UISettings, on_change, parent=None, hw_accel_active=True):
         super().__init__(parent)
         self.settings = settings
         self.on_change = on_change
-        self.setWindowTitle("GX Control – Design")
-        self.setMinimumWidth(460)
+        self.restart_now = False                 # "Jetzt neu starten" clicked
+        self._hw_active = hw_accel_active        # GPU mode of the running session
+        self._hw_at_open = bool(settings["hardware_acceleration"])
+        self.setWindowTitle("GX Control – Design & System")
+        self.setMinimumWidth(480)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 22, 24, 20)
@@ -85,6 +89,47 @@ class DesignDialog(QDialog):
             c2.addWidget(cb)
         root.addWidget(card2)
 
+        # system & streaming switches
+        card3 = QFrame()
+        card3.setObjectName("card")
+        c3 = QVBoxLayout(card3)
+        c3.setContentsMargins(18, 16, 18, 16)
+        c3.setSpacing(10)
+        lbl3 = QLabel("SYSTEM & STREAMING")
+        lbl3.setObjectName("dlgSub")
+        c3.addWidget(lbl3)
+
+        self.cb_hw = QCheckBox("Hardware-Beschleunigung aktivieren")
+        self.cb_hw.setChecked(bool(settings["hardware_acceleration"]))
+        self.cb_hw.toggled.connect(self._toggle_hw_accel)
+        c3.addWidget(self.cb_hw)
+
+        tip = QLabel("Tipp: Deaktivieren (Discord-Streaming-Modus), wenn beim Screen-Sharing von Netflix, "
+                     "Prime Video etc. auf Discord das Bild für Freunde schwarz bleibt. Videos laufen dann "
+                     "evtl. in geringerer Auflösung.")
+        tip.setWordWrap(True)
+        tip.setStyleSheet(f"color: {theme.MUTED}; font-size: 11px;")
+        c3.addWidget(tip)
+
+        self.restart_box = QWidget()
+        rb_layout = QHBoxLayout(self.restart_box)
+        rb_layout.setContentsMargins(0, 4, 0, 0)
+        rb_layout.setSpacing(10)
+
+        self.lbl_restart_hint = QLabel("* Neustart erforderlich, damit die Änderung wirksam wird.")
+        self.lbl_restart_hint.setStyleSheet(f"color: {theme.DANGER}; font-size: 11px; font-weight: bold;")
+        rb_layout.addWidget(self.lbl_restart_hint, 1)
+
+        self.btn_restart_now = QPushButton("Jetzt neu starten")
+        self.btn_restart_now.setFixedHeight(28)
+        self.btn_restart_now.clicked.connect(self._restart_now)
+        rb_layout.addWidget(self.btn_restart_now)
+
+        # also visible when an earlier change is still waiting for the restart
+        self.restart_box.setVisible(self._hw_at_open != self._hw_active)
+        c3.addWidget(self.restart_box)
+        root.addWidget(card3)
+
         btns = QHBoxLayout()
         btns.addStretch()
         done = QPushButton("Fertig")
@@ -108,3 +153,15 @@ class DesignDialog(QDialog):
     def _set(self, key, value):
         self.settings.set(key, bool(value))
         self.on_change()
+
+    def _toggle_hw_accel(self, on: bool):
+        self.settings.set("hardware_acceleration", bool(on))
+        self.restart_box.setVisible(bool(on) != self._hw_active)
+
+    def _restart_now(self):
+        self.restart_now = True
+        self.accept()
+
+    def hw_accel_changed(self) -> bool:
+        """Hardware acceleration switched in this dialog (the caller offers the restart)."""
+        return bool(self.settings["hardware_acceleration"]) != self._hw_at_open

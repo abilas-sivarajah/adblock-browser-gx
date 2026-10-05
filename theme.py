@@ -32,7 +32,13 @@ DANGER = "#ff4d5e"
 FONT_UI = '"Segoe UI Variable Text", "Segoe UI", sans-serif'
 FONT_GX = '"Bahnschrift", "Segoe UI", sans-serif'
 
-DEFAULTS = {"accent": ACCENTS[0][1], "sidebar": True, "bookmarks_bar": True, "animations": True}
+DEFAULTS = {
+    "accent": ACCENTS[0][1],
+    "sidebar": True,
+    "bookmarks_bar": True,
+    "animations": True,
+    "hardware_acceleration": True,
+}
 
 
 def rgb_tuple(hex_color: str):
