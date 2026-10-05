@@ -44,6 +44,10 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
   - Absicherung: Bleibt ein Titel nach dem Entfernen länger als 15 s bei 0:00 stehen, lädt der
     Browser ihn einmal ohne Entfernen neu. Die Werbung läuft dann abgedeckt und stumm, die
     Sendung startet sicher.
+  - **Pausen-Werbung:** Beim Pausieren holt der Player ein Werbebild (GraphQL `PauseAdsArtwork`).
+    Die Anzeige wird aus der Antwort entfernt – wie wenn keine gebucht wäre. Man sieht den normalen
+    Pausenbildschirm („Sie sehen gerade …“). Kommt doch eine durch, wird der Werbe-Dialog
+    unsichtbar gemacht (Leertaste spielt weiter) und ein Vorfall angelegt.
 - **Shield-Dashboard** (Klick auf `🛡️ 14`): Statistik, Ausnahmeliste pro Seite,
   globaler Schalter, Live-Monitor, Filterlisten-Update. Änderungen laden die Seite neu.
 - **Video-Vollbild** – drückt man im Player auf Vollbild, verschwinden Tab-, Adress- und
@@ -165,7 +169,7 @@ adblock-browser-claude/
 │   ├── twitch_main.js    # Twitch: hängt sich in den Video-Worker des Players
 │   ├── twitch_worker.js  # Twitch: Werbe-Playlists erkennen, werbefreien Stream einsetzen
 │   ├── youtube.js        # YouTube: Werbe-Daten entfernen, Fallback, Werbeblöcke ausblenden
-│   ├── netflix.js        # Netflix: Werbepausen aus den Abspieldaten, Abdecken, Hänger-Absicherung
+│   ├── netflix.js        # Netflix: Werbepausen + Pausen-Werbung entfernen, Abdecken, Hänger-Absicherung
 │   ├── ad_watch.js       # erkennt durchgerutschte Werbung und meldet sie ans Protokoll
 │   └── window_edges.js   # Größe ändern am rechten/unteren Rand über Webseiten
 ├── start_page.py         # GX-Startseite (virtueller Host start.adblockbrowser.example)
@@ -194,5 +198,6 @@ adblock-browser-claude/
 - **Netflix** zeigt nicht bei jedem Start Werbung, getestet wurde vor allem die Werbung vor
   dem Titel. Werbung mitten im Film war in den Tests nicht zu sehen (auch nach Vorspulen auf
   20/45/75 min nicht). Falls doch: Werbe-Protokoll ansehen oder F12 → Konsole →
-  `window.__abNetflix` (`breaksRemoved`, `seen` mit den Positionen der Pausen, `adsShown`).
+  `window.__abNetflix` (`breaksRemoved`, `seen` mit den Positionen der Pausen, `adsShown`,
+  `pauseAdsRemoved` / `pauseAdsHidden` für die Pausen-Werbung).
 - Scriptlets (`##+js(...)`) aus den Listen werden nicht ausgeführt.

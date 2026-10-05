@@ -35,6 +35,7 @@ KIND_TEXT = {
     "adblock-warning": "Werbeblocker-Hinweis der Seite entfernt",
     "ad-blocked": "Werbepause abgefangen",
     "ads-removed": "Werbe-Daten entfernt",
+    "pause-ad-removed": "Pausen-Werbung entfernt",
     "dai-blocked": "Werbe-Stream (Google DAI) blockiert",
     "backup-failed": "Ersatz-Stream fehlgeschlagen",
     "ad-visible-end": "Werbung vorbei",
@@ -146,7 +147,7 @@ class AdLogger:
                 e = json.loads(line)
             except ValueError:
                 continue
-            if e.get("kind") not in ("ad-blocked", "ads-removed", "dai-blocked", "masked"):
+            if e.get("kind") not in ("ad-blocked", "ads-removed", "pause-ad-removed", "dai-blocked", "masked"):
                 continue
             site = str(e.get("site", ""))
             for key in result:

@@ -3,6 +3,9 @@
 // 1. The player learns its ad breaks from the playback data (".adverts.adBreaks": position and
 //    length of every break). The list is emptied before the player sees it - in JSON.parse results
 //    and fetch().json() results. Without breaks the player has nothing to play.
+//    Pause ad: when a title is paused the player asks GraphQL "PauseAdsArtwork" for a picture ad
+//    (data.pinotPausedPlaybackPage.adPageSections). Its list is emptied the same way - the player
+//    then shows the normal pause screen. The pause ad dialog is hidden by CSS as well.
 // 2. Safety net: if an ad still runs, the player is covered and muted until it is over.
 // 3. Watchdog: if a title stays at 0:00 after the removal, it is reloaded once without removing.
 // For the ad log: which ad fields the data contained (names and counts only), stalls.
@@ -16,7 +19,8 @@
     if (window.__abNetflix) return;
 
     const stats = window.__abNetflix = {
-        dataWithAds: 0, breaksRemoved: 0, adsShown: 0, overlayActive: false, seen: [], pruning: true
+        dataWithAds: 0, breaksRemoved: 0, adsShown: 0, overlayActive: false, seen: [], pruning: true,
+        pauseAdData: 0, pauseAdsRemoved: 0, pauseAdsHidden: 0, pauseAdVia: null, pausePrune: true
     };
     // after a stall (see watchdog below) this page load runs without removing the breaks
     const NO_PRUNE_KEY = 'abNetflixNoPrune';
@@ -96,7 +100,26 @@
         }
     }
 
-    function safePrune(obj) {
+    // pause ad: an empty section list is what the player gets when no ad is booked
+    let pauseAdCleanAt = 0;  // last pause ad answer without an ad (removed by us or none booked)
+
+    function prunePauseAd(obj, via) {
+        const page = obj && obj.data && obj.data.pinotPausedPlaybackPage;
+        if (!page || typeof page !== 'object') return;
+        stats.pauseAdData++;
+        stats.pauseAdVia = via;
+        const sections = page.adPageSections;
+        if (stats.pausePrune && sections && Array.isArray(sections.edges) && sections.edges.length) {
+            sections.edges = [];
+            if (typeof sections.totalCount === 'number') sections.totalCount = 0;
+            stats.pauseAdsRemoved++;
+            toHost('pause-ad-removed', {summary: 'Pausen-Werbung aus den Daten entfernt', weg: via});
+        }
+        if (!sections || !Array.isArray(sections.edges) || !sections.edges.length) pauseAdCleanAt = Date.now();
+    }
+
+    function safePrune(obj, via) {
+        try { prunePauseAd(obj, via); } catch (e) {}
         if (!stats.pruning) return;
         try { prune(obj, 'daten', 0); } catch (e) {}
     }
@@ -105,7 +128,8 @@
         apply: function (target, thisArg, args) {
             const result = Reflect.apply(target, thisArg, args);
             if (typeof args[0] === 'string' && args[0].length > 200 &&
-                (args[0].indexOf('adBreak') !== -1 || args[0].indexOf('adverts') !== -1)) safePrune(result);
+                (args[0].indexOf('adBreak') !== -1 || args[0].indexOf('adverts') !== -1 ||
+                 args[0].indexOf('PausedPlayback') !== -1)) safePrune(result, 'JSON.parse');
             return result;
         }
     });
@@ -113,11 +137,29 @@
     Response.prototype.json = new Proxy(Response.prototype.json, {
         apply: function (target, thisArg, args) {
             return Reflect.apply(target, thisArg, args).then(function (result) {
-                safePrune(result);
+                safePrune(result, 'Response.json');
                 return result;
             });
         }
     });
+
+    // pause ad dialog stays invisible even if its data ever arrives another way. Not display:none -
+    // the dialog holds the keyboard focus, without it Space no longer resumes the title.
+    let pauseSheet = null;
+
+    function hidePauseAdDialog() {
+        try {
+            if (!pauseSheet) {
+                pauseSheet = new CSSStyleSheet();
+                pauseSheet.replaceSync('[data-uia="pause-ad"] { opacity: 0 !important; }\n' +
+                                       '[data-uia="pause-ad"], [data-uia="pause-ad"] * { pointer-events: none !important; }');
+            }
+            if (document.adoptedStyleSheets.indexOf(pauseSheet) === -1) {
+                document.adoptedStyleSheets = document.adoptedStyleSheets.concat([pauseSheet]);
+            }
+        } catch (e) {}
+    }
+    hidePauseAdDialog();
 
     // ---- 2. safety net: cover and mute a running ad ----
     let overlay = null, restoreMuted = null, adSince = 0;
@@ -194,8 +236,31 @@
         setTimeout(function () { location.reload(); }, 300);
     }
 
+    // The dialog also exists (hidden by Netflix) when no ad is booked - only an ad in it is logged.
+    let pauseDialogSince = 0, pauseAdHandled = false;
+
+    function checkPauseAd() {
+        hidePauseAdDialog();
+        const dialog = document.querySelector('[data-uia="pause-ad"]');
+        if (!dialog) {
+            pauseDialogSince = 0;
+            pauseAdHandled = false;
+            return;
+        }
+        const now = Date.now();
+        if (!pauseDialogSince) pauseDialogSince = now;
+        // decide once, after the answer had time to arrive
+        if (pauseAdHandled || now - pauseDialogSince < 1500) return;
+        pauseAdHandled = true;
+        if (pauseAdCleanAt && pauseAdCleanAt >= pauseDialogSince - 15000) return;
+        stats.pauseAdsHidden++;
+        toHost('masked', {summary: 'Netflix-Pausen-Werbung kam durch – unsichtbar gemacht',
+                          pausenWerbung: true, datenGesehen: stats.pauseAdData, weg: stats.pauseAdVia});
+    }
+
     setInterval(function () {
         try { watchdog(); } catch (e) {}
+        try { checkPauseAd(); } catch (e) {}
         const root = playerRoot();
         const info = root ? adInfo(root) : null;
         if (info) {
