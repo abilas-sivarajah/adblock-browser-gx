@@ -5,7 +5,8 @@
 Desktop-Browser für Windows: **PyQt6**-Oberfläche, **Microsoft Edge WebView2** als Web-Engine
 (per pythonnet eingebettet) und die **Brave AdBlock Rust-Engine** (`adblock`) als Werbeblocker.
 
-Diese Variante basiert auf `..\adblock-browser` und lässt das Original unverändert.
+Projektordner: `C:\AdBlockBrowser`. Diese Variante basiert auf dem Antigravity-Projekt
+`C:\Users\abila\.gemini\antigravity\scratch\adblock-browser` und lässt das Original unverändert.
 Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht geteilt.
 
 ---
@@ -151,7 +152,7 @@ jedem Filterlisten-Update mitgeladen.
 ## 📁 Projektstruktur
 
 ```
-adblock-browser-claude/
+AdBlockBrowser/
 ├── main.py               # Einstiegspunkt
 ├── main_window.py        # Hauptfenster (rahmenlos), Tabs, Navigation, Vollbild, Tastenkürzel
 ├── gx_widgets.py         # Titelleiste mit Tabs, Fensterknöpfe, Seitenleiste

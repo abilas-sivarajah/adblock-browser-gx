@@ -40,6 +40,7 @@ der normale Browser geschlossen ist. Sie verschieben „Weiterschauen“ beim Te
 | `nf_seek.py` | Vorspulen auf 20/45/75 min, Werbung/Fehler danach |
 | `nf_pause_final.py normal\|netz` | Pausen-Werbung: `normal` = wie ausgeliefert, `netz` = Entfernen aus, nur Sicherheitsnetz |
 | `nf_pause_probe2.py` | Mitschnitt beim Pausieren: GraphQL-Abfragen, DOM, Screenshot |
+| `profile_check.py` | Nach Verschieben/Kopieren des Projekts: Profil noch eingeloggt? (öffnet nur netflix.com/browse) |
 
 Hinweise: Direkt aufgerufene Titel starten wegen der Autoplay-Sperre oft nicht von selbst – die
 Skripte klicken dann per CDP auf Play. Die Pausen-Werbung kommt nur bei echtem Pausieren
