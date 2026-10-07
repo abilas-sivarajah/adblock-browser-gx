@@ -19,14 +19,38 @@
 
     const INIT = __AB_WORKER_INIT__;
     const BACKUP_TYPES = INIT.backupTypes || ['popout', 'frontpage', 'autoplay'];
+    const AD_SPOOFING_ENABLED = INIT.adSpoofing !== false;
     const GQL_QUERY = 'query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!, $platform: String!) {  streamPlaybackAccessToken(channelName: $login, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isLive) {    value    signature   authorization { isForbidden forbiddenReasonCode }   __typename  }  videoPlaybackAccessToken(id: $vodID, params: {platform: $platform, playerBackend: "mediaplayer", playerType: $playerType}) @include(if: $isVod) {    value    signature   __typename  }}';
+    const GQL_EVENT_HASH = '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b';
     const gqlHeaders = {'Client-ID': INIT.clientId, 'Content-Type': 'text/plain;charset=UTF-8'};
-    if (INIT.deviceId) gqlHeaders['Device-ID'] = INIT.deviceId;
+    if (INIT.deviceId) {
+        gqlHeaders['Device-ID'] = INIT.deviceId;
+        gqlHeaders['X-Device-Id'] = INIT.deviceId;
+    }
+    if (INIT.authHeader) {
+        gqlHeaders['Authorization'] = INIT.authHeader;
+    }
     const SESSION_MAX_AGE = 5 * 60 * 1000;
 
     const realFetch = self.fetch.bind(self);
     let channel = null;
-    try { channel = new BroadcastChannel(INIT.channel); } catch (e) {}
+    try {
+        channel = new BroadcastChannel(INIT.channel);
+        channel.onmessage = function (e) {
+            const d = e.data || {};
+            if (d.event === 'update-headers' && d.headers) {
+                const h = d.headers;
+                if (h.integrity) gqlHeaders['Client-Integrity'] = h.integrity;
+                if (h.auth) gqlHeaders['Authorization'] = h.auth;
+                if (h.version) gqlHeaders['Client-Version'] = h.version;
+                if (h.session) gqlHeaders['Client-Session-Id'] = h.session;
+                if (h.device) {
+                    gqlHeaders['Device-ID'] = h.device;
+                    gqlHeaders['X-Device-Id'] = h.device;
+                }
+            }
+        };
+    } catch (e) {}
 
     const variants = new Map();   // player's media playlist URL -> {login, res, fps, usher}
     const tokens = new Map();     // login|type -> {value, signature, ts}
@@ -34,6 +58,8 @@
     // every new session risks a new pre-roll ad.
     const sessions = new Map();   // login|type -> {master, created, retryAt, last}
     const sticky = new Map();     // login -> backup type the player is being fed from
+    const spoofedAdIds = new Set();
+    const recentSpoofedAdIds = new Map(); // adId -> timestamp, capped at 50
     let inAdBreak = false;
 
     function report(event, extra) {
@@ -55,6 +81,22 @@
     }
 
     // ---- playlist parsing ----
+    const ATTR_REGEX = /([A-Z0-9-]+)=("[^"]*"|[^,]*)/gi;
+    function parseAttrs(str) {
+        const result = {};
+        ATTR_REGEX.lastIndex = 0;
+        let match = ATTR_REGEX.exec(str);
+        while (match !== null) {
+            let val = match[2];
+            if (val && val.charCodeAt(0) === 34 && val.charCodeAt(val.length - 1) === 34) {
+                val = val.slice(1, -1);
+            }
+            result[match[1].toUpperCase()] = val;
+            match = ATTR_REGEX.exec(str);
+        }
+        return result;
+    }
+
     function isAdTitle(extinf) {
         const i = extinf.indexOf(',');
         const title = i < 0 ? '' : extinf.slice(i + 1).trim();
@@ -92,6 +134,128 @@
             if (isFinite(start) && isFinite(dur)) end = Math.max(end, start + dur * 1000);
         }
         return end || null;
+    }
+
+    // ---- ad spoofing (TTV-AB technique): report ad impressions & quartiles to Twitch GQL ----
+    async function notifyAdComplete(text) {
+        if (!AD_SPOOFING_ENABLED || !text || typeof text !== 'string') return;
+        const lines = text.split('\n');
+        const adLines = [];
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.startsWith('#EXT-X-DATERANGE') && (line.indexOf('stitched-ad') !== -1 || line.indexOf('twitch-stitched-ad') !== -1)) {
+                adLines.push(line);
+            }
+        }
+        if (!adLines.length) return;
+
+        const podLenMatch = text.match(/X-TV-TWITCH-AD-POD-LENGTH="(\d+)"/);
+        const explicitPodLength = podLenMatch ? parseInt(podLenMatch[1], 10) : 0;
+        const hasExplicitPodLength = explicitPodLength > 0;
+        const podLength = hasExplicitPodLength ? explicitPodLength : adLines.length;
+
+        if (hasExplicitPodLength && spoofedAdIds.size >= podLength) return;
+
+        for (let i = 0; i < adLines.length; i++) {
+            if (hasExplicitPodLength && spoofedAdIds.size >= podLength) break;
+            const line = adLines[i];
+            const attr = parseAttrs(line);
+            const idMatch = line.match(/\bID="([^"]+)"/);
+            const stitchedAdId = (idMatch && idMatch[1]) || attr['ID'] || '';
+            if (!stitchedAdId) continue;
+
+            if (recentSpoofedAdIds.has(stitchedAdId)) {
+                spoofedAdIds.add(stitchedAdId);
+                continue;
+            }
+            if (spoofedAdIds.has(stitchedAdId)) continue;
+
+            const radToken = attr['X-TV-TWITCH-AD-RADS-TOKEN'];
+            if (!radToken) continue;
+
+            const rollType = (attr['X-TV-TWITCH-AD-ROLL-TYPE'] || '').toLowerCase();
+            const adPos = parseInt(attr['X-TV-TWITCH-AD-POD-POSITION'] || String(i), 10) || 0;
+            const dur = parseFloat(attr['X-TV-TWITCH-AD-DURATION'] || attr['DURATION'] || attr['X-TV-TWITCH-AD-POD-FILLED-DURATION'] || '0') || 0;
+            const adDuration = Math.round(dur);
+
+            const payload = {
+                stitched: true,
+                ad_id: stitchedAdId,
+                roll_type: rollType,
+                creative_id: attr['X-TV-TWITCH-AD-CREATIVE-ID'] || '',
+                order_id: attr['X-TV-TWITCH-AD-ORDER-ID'] || '',
+                line_item_id: attr['X-TV-TWITCH-AD-LINE-ITEM-ID'] || '',
+                player_mute: false,
+                player_volume: 1.0,
+                visible: true,
+                duration: adDuration,
+                ad_position: adPos,
+                total_ads: podLength,
+            };
+
+            const makePacket = function (eventName, extra) {
+                return {
+                    operationName: 'ClientSideAdEventHandling_RecordAdEvent',
+                    variables: {
+                        input: {
+                            eventName: eventName,
+                            eventPayload: JSON.stringify(Object.assign({}, payload, extra || {})),
+                            radToken: radToken,
+                        },
+                    },
+                    extensions: {
+                        persistedQuery: {
+                            version: 1,
+                            sha256Hash: GQL_EVENT_HASH,
+                        },
+                    },
+                };
+            };
+
+            spoofedAdIds.add(stitchedAdId);
+            recentSpoofedAdIds.set(stitchedAdId, Date.now());
+            while (recentSpoofedAdIds.size > 50) {
+                const oldest = recentSpoofedAdIds.keys().next().value;
+                if (oldest === undefined) break;
+                recentSpoofedAdIds.delete(oldest);
+            }
+
+            const batch = [
+                makePacket('video_ad_impression'),
+                makePacket('video_ad_quartile_complete', { quartile: 1 }),
+                makePacket('video_ad_quartile_complete', { quartile: 2 }),
+                makePacket('video_ad_quartile_complete', { quartile: 3 }),
+                makePacket('video_ad_quartile_complete', { quartile: 4 }),
+            ];
+            if (hasExplicitPodLength && spoofedAdIds.size >= podLength) {
+                batch.push(makePacket('video_ad_pod_complete'));
+            }
+
+            const headers = Object.assign({}, gqlHeaders, {
+                'Content-Type': 'text/plain;charset=UTF-8',
+            });
+            if (!headers['X-Device-Id']) {
+                headers['X-Device-Id'] = headers['Device-ID'] || 'oauth';
+            }
+
+            try {
+                realFetch('https://gql.twitch.tv/gql', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(batch),
+                }).then(function (response) {
+                    if (response && response.status !== 200) {
+                        report('error', {error: 'Ad spoofing GQL status ' + response.status});
+                    }
+                }).catch(function (err) {
+                    report('error', {error: 'Ad spoofing failed: ' + (err && err.message || err)});
+                });
+            } catch (err) {
+                report('error', {error: 'Ad spoofing sync error: ' + (err && err.message || err)});
+            }
+
+            report('ad-spoofed', {count: 1, id: stitchedAdId, roll: rollType});
+        }
     }
 
     function parseVariants(master) {
@@ -226,6 +390,7 @@
     function leaveAdBreak() {
         if (!inAdBreak) return;
         inAdBreak = false;
+        spoofedAdIds.clear();
         report('ad-end');
     }
 
@@ -239,11 +404,18 @@
         const info = variants.get(url);
         const login = info && info.login;
 
+        if (hasAds(text)) {
+            notifyAdComplete(text).catch(function () {});
+        }
+
         const stickyType = login && sticky.get(login);
         if (stickyType) {
             const b = await backupText(info, stickyType);
             if (b) {
-                if (hasAds(b.text)) return masked(b.text);   // ad break reached the backup too
+                if (hasAds(b.text)) {
+                    notifyAdComplete(b.text).catch(function () {});
+                    return masked(b.text);   // ad break reached the backup too
+                }
                 leaveAdBreak();
                 if (hasAds(text)) report('replaced');
                 return b.text;
@@ -298,6 +470,14 @@
     };
 
     // exposed for tests only
-    self.__abTwitchTest = {hasAds: hasAds, pickVariant: pickVariant, adEndsAt: adEndsAt};
+    self.__abTwitchTest = {
+        hasAds: hasAds,
+        pickVariant: pickVariant,
+        adEndsAt: adEndsAt,
+        parseAttrs: parseAttrs,
+        notifyAdComplete: notifyAdComplete,
+        spoofedAdIds: spoofedAdIds,
+        recentSpoofedAdIds: recentSpoofedAdIds
+    };
     report('worker-hooked');
 })();

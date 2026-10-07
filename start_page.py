@@ -228,7 +228,7 @@ body {
 
     <div class="searchwrap glow"><form class="search cut" id="searchForm" autocomplete="off">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20.5 20.5l-4.5-4.5"/></svg>
-        <input id="q" placeholder="Mit DuckDuckGo suchen oder Adresse eingeben" autofocus>
+        <input id="q" placeholder="Mit Google suchen oder Adresse eingeben" autofocus>
         <kbd>/</kbd>
     </form></div>
 
@@ -339,7 +339,7 @@ document.getElementById('searchForm').onsubmit = (e) => {
     if (!v) return;
     if (/^https?:\/\//i.test(v)) location.href = v;
     else if (/^[^\s]+\.[^\s]{2,}$/.test(v)) location.href = 'https://' + v;
-    else location.href = 'https://duckduckgo.com/?q=' + encodeURIComponent(v);
+    else location.href = 'https://www.google.com/search?q=' + encodeURIComponent(v);
 };
 document.addEventListener('keydown', (e) => {
     if (e.key === '/' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); document.getElementById('q').focus(); }

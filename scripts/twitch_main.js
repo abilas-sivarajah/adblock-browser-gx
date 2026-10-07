@@ -15,7 +15,8 @@
     const CHANNEL = 'adblock-twitch-' + Math.random().toString(36).slice(2);  // per page, not per origin
     const stats = window.__abTwitch = {
         workers: 0, hookedWorkers: 0, masters: 0, playlists: 0, adBreaks: 0, replaced: 0, masked: 0,
-        lastBackupType: null, backupTrail: [], errors: [], overlayActive: false
+        holds: 0, nativeReturns: 0, adSeconds: 0, vodAdsBlocked: 0, spoofedAds: 0,
+        lastBackupType: null, backupTrail: [], errors: [], overlayActive: false, bridgeActive: false
     };
     const channelName = function () { return location.pathname.split('/')[1] || ''; };
 
@@ -85,8 +86,9 @@
         toHost(kind, details);
     }
 
+    let channel = null;
     try {
-        const channel = new BroadcastChannel(CHANNEL);
+        channel = new BroadcastChannel(CHANNEL);
         let adPlaylist = null;
         channel.onmessage = function (e) {
             const d = e.data || {};
@@ -107,6 +109,9 @@
                 showOverlay(d.endsAt, true);
                 logOnce('masked', {summary: 'Twitch, Kanal ' + channelName() + ' – kein werbefreier Ersatz-Stream', playlist: adPlaylist,
                                    ersatzVersuche: stats.backupTrail.slice(-12), fehler: stats.errors.slice(-10), blocker: stats});
+            } else if (d.event === 'ad-spoofed') {
+                stats.spoofedAds += (d.count || 1);
+                logOnce('ad-spoofed', {summary: 'Twitch-Werbung als gesehen gemeldet (Spoofing, ' + (d.roll || 'Spot') + ')', kanal: channelName(), adId: d.id});
             } else if (d.event === 'backup') {
                 stats.lastBackupType = d.type;
             } else if (d.event === 'backup-result') {
@@ -124,6 +129,50 @@
         };
     } catch (e) {}
 
+    // Sniff Twitch page's GQL fetch headers (Client-Integrity, Authorization, etc.)
+    // and broadcast them to the player worker for authenticated requests and ad spoofing.
+    try {
+        const origFetch = window.fetch;
+        let lastHeaders = {};
+        window.fetch = function (input, init) {
+            try {
+                const url = typeof input === 'string' ? input : (input && input.url) || '';
+                if (url.indexOf('gql.twitch.tv') !== -1 && init && init.headers) {
+                    const h = init.headers;
+                    const getHeader = function (name) {
+                        if (!h) return null;
+                        if (typeof h.get === 'function') return h.get(name);
+                        if (Array.isArray(h)) {
+                            const entry = h.find(function (r) { return r && String(r[0] || '').toLowerCase() === name.toLowerCase(); });
+                            return entry ? entry[1] : null;
+                        }
+                        if (typeof h === 'object') {
+                            return h[name] || h[name.toLowerCase()] || null;
+                        }
+                        return null;
+                    };
+                    const integrity = getHeader('Client-Integrity');
+                    const auth = getHeader('Authorization');
+                    const version = getHeader('Client-Version');
+                    const session = getHeader('Client-Session-Id');
+                    const dev = getHeader('X-Device-Id');
+                    let changed = false;
+                    const updates = {};
+                    if (integrity && integrity !== lastHeaders.integrity) { updates.integrity = integrity; changed = true; }
+                    if (auth && auth !== lastHeaders.auth) { updates.auth = auth; changed = true; }
+                    if (version && version !== lastHeaders.version) { updates.version = version; changed = true; }
+                    if (session && session !== lastHeaders.session) { updates.session = session; changed = true; }
+                    if (dev && dev !== lastHeaders.device) { updates.device = dev; changed = true; }
+                    if (changed && channel) {
+                        Object.assign(lastHeaders, updates);
+                        try { channel.postMessage({event: 'update-headers', headers: updates}); } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+            return origFetch.apply(this, arguments);
+        };
+    } catch (e) {}
+
     function toHost(kind, details) {
         try {
             window.chrome.webview.postMessage({type: 'adblock-ad-event', site: 'twitch', kind: kind, details: details});
@@ -135,8 +184,20 @@
         return m ? decodeURIComponent(m[1]) : '';
     }
 
+    function authHeader() {
+        const m = document.cookie.match(/(?:^|;\s*)auth-token=([^;]+)/);
+        return m ? 'OAuth ' + decodeURIComponent(m[1]) : '';
+    }
+
     function hookCode() {
-        const init = JSON.stringify({clientId: CLIENT_ID, deviceId: deviceId(), backupTypes: CFG.twitchBackupTypes, channel: CHANNEL});
+        const init = JSON.stringify({
+            clientId: CLIENT_ID,
+            deviceId: deviceId(),
+            authHeader: authHeader(),
+            backupTypes: CFG.twitchBackupTypes,
+            channel: CHANNEL,
+            adSpoofing: CFG.adSpoofing !== false
+        });
         return WORKER_HOOK.replace('__AB_WORKER_INIT__', function () { return init; });
     }
 

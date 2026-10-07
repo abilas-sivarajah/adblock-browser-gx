@@ -114,14 +114,20 @@ class BrowserTab(QWidget):
         props = WV2.CoreWebView2CreationProperties()
         props.UserDataFolder = os.path.join(self.filter_engine.data_dir, "wv2_profile")
         browser_args = []
+        # Audio in the WebView2 browser process (a direct child of this program) instead of its own
+        # audio process (a grandchild): Discord captures an app's sound via Windows process loopback,
+        # and that only includes direct child processes - otherwise the stream has no sound.
+        disabled_features = ["AudioServiceOutOfProcess"]
         debug_port = os.environ.get("ADBLOCK_REMOTE_DEBUG_PORT")
         if debug_port:
             browser_args.append(f"--remote-debugging-port={debug_port}")
         if os.environ.get("ADBLOCK_HIDDEN_WINDOW"):
             # keep rendering although the window is off-screen, and stay silent
             browser_args += ["--mute-audio", "--disable-renderer-backgrounding",
-                             "--disable-backgrounding-occluded-windows",
-                             "--disable-features=CalculateNativeWinOcclusion"]
+                             "--disable-backgrounding-occluded-windows"]
+            disabled_features.append("CalculateNativeWinOcclusion")
+        # only the last --disable-features counts, so all features go into one switch
+        browser_args.append("--disable-features=" + ",".join(disabled_features))
 
         if not self.hw_accel:
             # Discord streaming mode: without GPU video overlays, DRM videos (Netflix etc.)
@@ -133,8 +139,7 @@ class BrowserTab(QWidget):
                 "--disable-direct-composition-video-overlays",
             ]
 
-        if browser_args:
-            props.AdditionalBrowserArguments = " ".join(browser_args)
+        props.AdditionalBrowserArguments = " ".join(browser_args)
 
         self.wv = WV2.WebView2()
         self.wv.CreationProperties = props

@@ -5,10 +5,8 @@ navigation bar and the Microsoft Edge WebView2 pages (BrowserTab) underneath.
 
 import ctypes
 import os
-import re
 import sys
 import time
-import urllib.parse
 
 from PyQt6 import sip
 from PyQt6.QtCore import QEvent, QPoint, QProcess, QSize, Qt, QTimer
@@ -19,6 +17,7 @@ from PyQt6.QtWidgets import (QApplication, QGraphicsDropShadowEffect, QHBoxLayou
 
 import icons
 import native_frame
+import omnibox
 import theme
 from ad_logger import AdLogger
 from adblock_dialog import AdBlockDialog
@@ -75,6 +74,7 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.apply_theme()
         self.setup_shortcuts()
+        QApplication.instance().installEventFilter(self)  # clicks into inputs: see _reclaim_keyboard
 
         # Open initial tab
         self.open_new_tab(initial_url)
@@ -129,9 +129,11 @@ class MainWindow(QMainWindow):
 
         self.address_bar = QLineEdit()
         self.address_bar.setObjectName("addressBar")
-        self.address_bar.setPlaceholderText("Suchen oder Webadresse eingeben")
+        self.address_bar.setPlaceholderText("Mit Google suchen oder Webadresse eingeben")
         self.address_bar.setFixedHeight(36)
         self.address_bar.returnPressed.connect(self.navigate_to_address)
+        self.omnibox = omnibox.Omnibox(self.address_bar, self.bm_manager, self)
+        self.omnibox.open_url.connect(self.open_address)
         self.addr_icon = QAction(self.address_bar)
         self.address_bar.addAction(self.addr_icon, QLineEdit.ActionPosition.LeadingPosition)
         self.star_action = QAction(self.address_bar)
@@ -206,6 +208,7 @@ class MainWindow(QMainWindow):
         self.btn_menu.setIcon(icons.icon("menu", theme.MUTED, 19, theme.TEXT))
         self._set_reload_icon()
         self.shield_glow.setColor(QColor(accent))
+        self.omnibox.set_accent(accent)
         for i in range(self.tabs.count()):
             self._refresh_tab_icon(self.tabs.widget(i))
         tab = self.get_current_tab()
@@ -418,7 +421,12 @@ class MainWindow(QMainWindow):
         tab = self.get_current_tab()
         if not tab:
             return
-        self.update_address_bar(tab.current_url_str)
+        self.omnibox.hide()
+        # the hidden tab's page may keep the keyboard focus - typing would go nowhere
+        focused = native_frame.focused_window()
+        if focused and not native_frame.is_visible(focused):
+            self._reclaim_keyboard()
+        self.update_address_bar(tab.current_url_str, force=True)
         self.update_shield_badge(tab.blocked_count)
         self.update_bookmark_star(tab.current_url_str)
         self.setWindowTitle(f"{tab.current_title_str} - {APP_NAME}")
@@ -537,7 +545,10 @@ class MainWindow(QMainWindow):
         self.btn_shield.style().unpolish(self.btn_shield)
         self.btn_shield.style().polish(self.btn_shield)
 
-    def update_address_bar(self, url_str: str):
+    def update_address_bar(self, url_str: str, force: bool = False):
+        # keep what the user is typing (YouTube, Twitch etc. change their URL while you type)
+        if not force and self.address_bar.hasFocus() and self.address_bar.isModified():
+            return
         accent = self.ui["accent"]
         if not url_str or url_str == "about:start":
             self.address_bar.setText("")
@@ -555,21 +566,17 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ navigation
     def navigate_to_address(self):
+        text = self.address_bar.text().strip()
+        if text:
+            self.open_address(omnibox.resolve(text))
+
+    def open_address(self, url: str):
+        """Address bar: typed text (Enter) or a chosen suggestion."""
         tab = self.get_current_tab()
         if not tab:
             return
-        text = self.address_bar.text().strip()
-        if not text:
-            return
-        if text.startswith(("http://", "https://", "about:", "file://", "edge://")):
-            dest = text
-        elif re.match(r"^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(/.*)?$", text):
-            dest = "http://" + text
-        elif "." in text and " " not in text:
-            dest = "https://" + text
-        else:
-            dest = "https://duckduckgo.com/?q=" + urllib.parse.quote(text)
-        tab.load(dest)
+        self.address_bar.setModified(False)
+        tab.load(url)
         tab.focus_page()
 
     def navigate_back(self):
@@ -600,11 +607,13 @@ class MainWindow(QMainWindow):
     def navigate_home(self):
         tab = self.get_current_tab()
         if tab:
+            self.address_bar.setModified(False)
             tab.load_start_page()
 
     def load_url_in_current_tab(self, url_str: str):
         tab = self.get_current_tab()
         if tab:
+            self.address_bar.setModified(False)
             tab.load(url_str)
 
     # ------------------------------------------------------------------ sidebar
@@ -827,8 +836,24 @@ class MainWindow(QMainWindow):
         if fn:
             fn()
 
+    def eventFilter(self, obj, ev):
+        if (ev.type() == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget) and obj.window() is self
+                and obj.focusPolicy() & Qt.FocusPolicy.ClickFocus):
+            self._reclaim_keyboard()
+        return super().eventFilter(obj, ev)
+
+    def _reclaim_keyboard(self):
+        """WebView2 pages are native windows of another process. While one of them holds the Windows
+        keyboard focus (e.g. after a reload), a click into the address bar does not take it back and
+        typing still goes to the page - or nowhere, if that tab is hidden now. So take it explicitly."""
+        hwnd = int(self.winId())
+        focused = native_frame.focused_window()
+        if focused and focused != hwnd:
+            native_frame.set_focus(hwnd)
+
     def focus_address_bar(self):
         self.activateWindow()
+        self._reclaim_keyboard()
         self.address_bar.setFocus()
         self.address_bar.selectAll()
 

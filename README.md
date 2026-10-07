@@ -58,6 +58,10 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
   - Das Video wird ohne geschütztes DirectComposition-Overlay gerendert und ist im Discord-Stream
     für alle Freunde sichtbar. Ohne Hardware-DRM liefern die Dienste evtl. eine geringere Auflösung.
   - Nach dem Umschalten startet der Browser neu und öffnet die aktuelle Seite wieder.
+  - **Ton im Stream:** Discord nimmt den Ton eines geteilten Fensters per Windows-Loopback auf –
+    nur vom Programm selbst und seinen direkten Unterprozessen. WebView2 spielt den Ton darum im
+    eigenen Hauptprozess ab (`--disable-features=AudioServiceOutOfProcess`), nicht in einem
+    separaten Audio-Prozess. Das gilt immer, auch ohne Discord-Modus.
 - **Shield-Dashboard** (Klick auf `🛡️ 14`): Statistik, Ausnahmeliste pro Seite,
   globaler Schalter, Live-Monitor, Filterlisten-Update. Änderungen laden die Seite neu.
 - **Video-Vollbild** – drückt man im Player auf Vollbild, verschwinden Tab-, Adress- und
@@ -76,6 +80,11 @@ Gamer-Look im Stil von Opera GX – dunkle Flächen, eine Neon-Akzentfarbe, Schr
   Rändern (über Webseiten per unsichtbarem Streifen, `scripts/window_edges.js`).
 - **Tabs** mit Favicon, **Lautsprecher-Symbol** wenn ein Tab Ton abspielt (Klick = stumm),
   Mittelklick schließt, Rechtsklick: neu laden, duplizieren, stummschalten, andere schließen.
+- **Adressleiste mit Vorschlägen** (`omnibox.py`): Suche mit **Google**. Beim Tippen erscheinen
+  besuchte Seiten, Lesezeichen und frühere Suchen aus dem Verlauf, bekannte Seiten werden direkt
+  ergänzt (`net` → `netflix.com`, Backspace entfernt die Ergänzung), darunter Google-Vorschläge
+  (Suchbegriffe und Webseiten). ↑/↓ wählt, Enter öffnet, Esc schließt. Vollständige Adressen
+  (`https://…`) werden nicht an Google geschickt.
 - **Seitenleiste:** Startseite, Twitch, YouTube, Discord (öffnet oder springt zum vorhandenen Tab),
   Lesezeichen, Verlauf, Werbe-Protokoll, GX Control, Shield.
 - **GX Control** (Paletten-Symbol unten in der Seitenleiste): 8 Akzentfarben – GX Rot, Neon Pink,

@@ -25,6 +25,7 @@ def build_site_scripts(enabled: bool, whitelist) -> list[str]:
         "enabled": bool(enabled),
         "whitelist": sorted(whitelist),
         "twitchBackupTypes": TWITCH_BACKUP_TYPES,
+        "adSpoofing": True,
     })
     twitch = (_read("twitch_main.js")
               .replace("__AB_CONFIG__", config)

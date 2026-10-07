@@ -46,10 +46,15 @@ const backupMaster = (type) => '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=6000000,RES
 const USHER = 'https://usher.ttvnw.net/api/v2/channel/hls/gotaga.m3u8?sig=player&token=x';
 const AD_END = Date.parse('2026-10-04T16:03:57.709Z') + 15235;
 
-function gql(seen) {
+function gql(seen, spoofBatches) {
     return (u, init) => {
-        const t = JSON.parse(init.body).variables.playerType;
-        seen.push(t);
+        const body = JSON.parse(init.body);
+        if (Array.isArray(body)) {
+            if (spoofBatches) spoofBatches.push(body);
+            return body.map(() => ({data: {recordAdEvent: true}}));
+        }
+        const t = body && body.variables && body.variables.playerType;
+        if (t && seen) seen.push(t);
         return {data: {streamPlaybackAccessToken: {value: '{"player_type":"' + t + '"}', signature: 'sig-' + t}}};
     };
 }
@@ -163,6 +168,57 @@ const count = (log, s) => log.filter(l => l.includes(s)).length;
     // 6) unrelated requests pass through untouched
     const w6 = makeWorker([['example.com', 'hello']], []);
     check('6 other requests are not touched', await (await w6.fetch('https://example.com/a')).text() === 'hello');
+
+    // 7) Ad Spoofing (TTV-AB technique): reports impressions, quartiles & pod complete to Twitch GQL
+    {
+        const log = [], ev = [], spoofBatches = [];
+        const w7 = makeWorker([
+            ['gql.twitch.tv', gql([], spoofBatches)],
+            ['usher.ttvnw.net', usher],
+            ['ORIGINAL-', adMedia],
+            ['https://x/', adMedia],
+        ], log, ev);
+        const t7 = w7.__abTwitchTest;
+
+        // 7a attribute parser
+        const parsed = t7.parseAttrs('#EXT-X-DATERANGE:ID="stitched-ad-test",CLASS="twitch-stitched-ad",DURATION=15.235,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"');
+        check('7a parseAttrs parses quoted and unquoted attributes',
+              parsed.ID === 'stitched-ad-test' && parsed['X-TV-TWITCH-AD-ROLL-TYPE'] === 'PREROLL' && parsed.DURATION === '15.235');
+
+        // 7b fetch ad playlist triggers notifyAdComplete
+        await w7.fetch(USHER);
+        await w7.fetch(ORIG_720);
+
+        check('7b ad playlist triggers GQL ad spoofing batch', spoofBatches.length >= 1);
+        const batch = spoofBatches[0];
+        check('7c batch contains impression, 4 quartiles and pod complete',
+              batch && batch.length === 6 &&
+              batch[0].variables.input.eventName === 'video_ad_impression' &&
+              batch[1].variables.input.eventName === 'video_ad_quartile_complete' &&
+              batch[2].variables.input.eventName === 'video_ad_quartile_complete' &&
+              batch[3].variables.input.eventName === 'video_ad_quartile_complete' &&
+              batch[4].variables.input.eventName === 'video_ad_quartile_complete' &&
+              batch[5].variables.input.eventName === 'video_ad_pod_complete');
+
+        const firstPayload = batch ? JSON.parse(batch[0].variables.input.eventPayload) : {};
+        check('7d packet payload contains stitched ad details and RADS token',
+              firstPayload.stitched === true &&
+              firstPayload.ad_id === 'stitched-ad-1791129837-15235000000' &&
+              firstPayload.roll_type === 'preroll' &&
+              firstPayload.creative_id === '2488883100494' &&
+              firstPayload.duration === 15 &&
+              batch[0].variables.input.radToken.startsWith('eyJhbGci') &&
+              batch[0].extensions.persistedQuery.sha256Hash === '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b');
+
+        // 7e deduplication: second poll of the same playlist does not send another batch
+        const countBefore = spoofBatches.length;
+        await w7.fetch(ORIG_720);
+        check('7e deduplication prevents re-spoofing the same ad ID', spoofBatches.length === countBefore);
+
+        // 7f broadcast event sent
+        check('7f ad-spoofed event reported on channel',
+              ev.some(e => e.event === 'ad-spoofed' && e.id === 'stitched-ad-1791129837-15235000000'));
+    }
 
     console.log(`\n${passed} passed, ${failed} failed`);
     process.exit(failed ? 1 : 0);

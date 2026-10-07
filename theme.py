@@ -143,6 +143,8 @@ QLineEdit#addressBar {{
 }}
 QLineEdit#addressBar:hover {{ border-color: {rgba(A, .45)}; }}
 QLineEdit#addressBar:focus {{ border: 1px solid {A}; background: {BG0}; }}
+#omniBox {{ background: {BG1}; border: 1px solid {rgba(A, .5)}; border-radius: 14px; }}
+QListWidget#omniList {{ background: transparent; border: none; outline: 0; }}
 #shieldBtn {{
     background: {rgba(A, .14)}; color: {TEXT};
     border: 1px solid {rgba(A, .75)}; border-radius: 15px;

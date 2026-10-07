@@ -34,6 +34,10 @@ _user32.SetWindowLongW.restype = ctypes.c_long
 _user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
 _user32.MonitorFromWindow.restype = wintypes.HMONITOR
 _user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+_user32.GetFocus.restype = wintypes.HWND
+_user32.SetFocus.restype = wintypes.HWND
+_user32.SetFocus.argtypes = [wintypes.HWND]
+_user32.IsWindowVisible.argtypes = [wintypes.HWND]
 
 
 class _MARGINS(ctypes.Structure):
@@ -60,6 +64,20 @@ def apply(hwnd: int):
 
 def has_frame(hwnd: int) -> bool:
     return _user32.GetWindowLongW(hwnd, _GWL_STYLE) & _FRAME_STYLES == _FRAME_STYLES
+
+
+def focused_window() -> int:
+    """Window with the keyboard focus in this thread's input queue - can be a WebView2 page
+    window, which belongs to another process but shares the input queue as a child window."""
+    return _user32.GetFocus() or 0
+
+
+def set_focus(hwnd: int):
+    _user32.SetFocus(hwnd)
+
+
+def is_visible(hwnd: int) -> bool:
+    return bool(_user32.IsWindowVisible(hwnd))
 
 
 def message(address: int) -> wintypes.MSG:
