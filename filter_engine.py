@@ -129,6 +129,7 @@ class FilterEngine:
         self.engine: adblock.Engine = None
         self.is_loaded = False
         self.is_enabled = True
+        self.ad_spoofing = False  # Twitch: report blocked ads as watched (site_scripts.py)
 
         # Whitelist and settings
         self.whitelist = set()
@@ -147,6 +148,7 @@ class FilterEngine:
                     self.whitelist = set(data.get("whitelist", []))
                     self.total_blocked = data.get("total_blocked", 0)
                     self.is_enabled = data.get("is_enabled", True)
+                    self.ad_spoofing = bool(data.get("ad_spoofing", False))
             except Exception as e:
                 logger.error(f"Error loading adblock config: {e}")
 
@@ -155,7 +157,8 @@ class FilterEngine:
             data = {
                 "whitelist": sorted(self.whitelist),
                 "total_blocked": self.total_blocked,
-                "is_enabled": self.is_enabled
+                "is_enabled": self.is_enabled,
+                "ad_spoofing": self.ad_spoofing
             }
             try:
                 with open(self.config_file, "w", encoding="utf-8") as f:

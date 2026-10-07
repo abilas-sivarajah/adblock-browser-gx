@@ -147,6 +147,14 @@ class AdBlockDialog(QDialog):
         self.global_check.toggled.connect(self.on_global_toggled)
         ctrl_layout.addWidget(self.global_check)
 
+        # Twitch ad spoofing (off by default: it reports ads as watched with the viewer's login)
+        self.spoof_check = QCheckBox("Twitch: blockierte Werbung als gesehen melden (Ad-Spoofing)")
+        self.spoof_check.setChecked(self.filter_engine.ad_spoofing)
+        self.spoof_check.setToolTip("Meldet Twitch mit deinem Konto Werbung als vollständig gesehen, die nie lief.\n"
+                                    "Kann gegen die Nutzungsbedingungen von Twitch verstoßen. Wirkt nach dem Neuladen.")
+        self.spoof_check.toggled.connect(self.on_spoofing_toggled)
+        ctrl_layout.addWidget(self.spoof_check)
+
         layout.addLayout(ctrl_layout)
 
         # Filter Update Button
@@ -180,6 +188,11 @@ class AdBlockDialog(QDialog):
 
     def on_global_toggled(self, checked: bool):
         self.filter_engine.is_enabled = checked
+        self.filter_engine.save_config()
+        self.settings_changed = True
+
+    def on_spoofing_toggled(self, checked: bool):
+        self.filter_engine.ad_spoofing = checked
         self.filter_engine.save_config()
         self.settings_changed = True
 

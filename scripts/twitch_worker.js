@@ -51,7 +51,7 @@
         nativeClean: 3        // own session ad-free for this many new playlists -> back to it
     }, INIT.timing || {});
     const AD_TEXT = /stitched-ad|X-TV-TWITCH-AD|\/adsquared\/|SCTE35-OUT|EXT-X-CUE-OUT|CLASS="twitch-(?:stitched-)?ad(?:-|")|"MIDROLL"/i;
-    const AD_SPOOFING_ENABLED = INIT.adSpoofing !== false;
+    const AD_SPOOFING_ENABLED = INIT.adSpoofing === true;  // setting, off by default
     const GQL_EVENT_HASH = '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b';
     const spoofedAdIds = new Set();
     const recentSpoofedAdIds = new Map(); // adId -> timestamp, capped at 50
@@ -81,17 +81,6 @@
             else if (d.event === 'page') pageIsVod = !!d.vod;
             else if (d.event === 'fetch-response' && relayed.has(d.id)) relayed.get(d.id)(d);
             else if (d.event === 'stalled') onStalled();
-            else if (d.event === 'update-headers' && d.headers) {
-                const h = d.headers;
-                if (h.integrity) viewer['Client-Integrity'] = h.integrity;
-                if (h.auth) viewer['Authorization'] = h.auth;
-                if (h.version) viewer['Client-Version'] = h.version;
-                if (h.session) viewer['Client-Session-Id'] = h.session;
-                if (h.device) {
-                    viewer['Device-ID'] = h.device;
-                    viewer['X-Device-Id'] = h.device;
-                }
-            }
         });
     }
 
@@ -196,7 +185,7 @@
         return end || null;
     }
 
-// ---- ad spoofing (TTV-AB technique): report ad impressions & quartiles to Twitch GQL ----
+    // ---- ad spoofing (TTV-AB technique, only if switched on): report ad impressions & quartiles to Twitch GQL ----
     async function notifyAdComplete(text) {
         if (!AD_SPOOFING_ENABLED || !text || typeof text !== 'string') return;
         const lines = text.split('\n');
@@ -900,7 +889,8 @@
         unmask(ctx);
         if (!ctx.inAd) return;
         ctx.inAd = false;
-        spoofedAdIds.clear();        report('ad-end');
+        spoofedAdIds.clear();
+        report('ad-end');
     }
 
     function mask(ctx, out, adText, isHold) {
@@ -1084,7 +1074,8 @@
             ctx = {key: u.key, login: u.login, vod: u.vod, sessions: new Map(), gen: 0, tl: null, inAd: false,
                    masked: false, bridgeSince: 0, scan: null, cleanStreak: 0, natLastSeq: null, fmp4: undefined,
                    wait: null};
-            contexts.set(u.key, ctx);        }
+            contexts.set(u.key, ctx);
+        }
         ctx.usher = url;
         ctx.gen++;
         ctx.nativeId = 'native:' + ctx.gen;
@@ -1148,5 +1139,6 @@
         notifyAdComplete: notifyAdComplete,
         spoofedAdIds: spoofedAdIds,
         recentSpoofedAdIds: recentSpoofedAdIds
-    };    report('worker-hooked');
+    };
+    report('worker-hooked');
 })();

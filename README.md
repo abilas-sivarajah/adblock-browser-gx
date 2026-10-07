@@ -42,6 +42,10 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
   - Außerdem: Twitchs eigene Kopfzeilen für die Ersatz-Anfragen (Anmeldung nur, wenn ein Stream
     anonym nicht geht), Neustart-Hilfe bei hängendem Video, Werbebanner/„Stream Display Ads“
     ausgeblendet, VOD-Werbung (VAST) blockiert.
+  - Optional, **standardmäßig aus** (Shield-Dashboard): **Ad-Spoofing** meldet Twitch blockierte
+    Werbung als gesehen (Impression, Quartile, Pod-Ende per GraphQL, nach TTV-AB), damit Twitch nicht
+    gleich die nächste Werbung schickt. Das geschieht mit deinem Twitch-Konto für Werbung, die nie
+    lief – kann gegen die Nutzungsbedingungen von Twitch verstoßen.
 - **YouTube ohne Werbung** – die Werbe-Daten (`adPlacements`, `playerAds`, `adSlots`) werden
   aus den Player-Antworten entfernt, bevor der Player sie sieht (`scripts/youtube.js`).
   Werbeblöcke in Startseite/Sidebar und der „Werbeblocker“-Hinweis werden ausgeblendet.
@@ -71,7 +75,8 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
     eigenen Hauptprozess ab (`--disable-features=AudioServiceOutOfProcess`), nicht in einem
     separaten Audio-Prozess. Das gilt immer, auch ohne Discord-Modus.
 - **Shield-Dashboard** (Klick auf `🛡️ 14`): Statistik, Ausnahmeliste pro Seite,
-  globaler Schalter, Live-Monitor, Filterlisten-Update. Änderungen laden die Seite neu.
+  globaler Schalter, Twitch-Ad-Spoofing, Live-Monitor, Filterlisten-Update. Änderungen laden die
+  Seite neu.
 - **Video-Vollbild** – drückt man im Player auf Vollbild, verschwinden Tab-, Adress- und
   Lesezeichenleiste und das Fenster geht in den Vollbildmodus.
 - Tabs, Startseite mit eigenen Schnellzugriffen (werden gespeichert), Lesezeichen, Verlauf,
@@ -239,4 +244,7 @@ Die Twitch-Techniken (360p-Brücke über „autoplay“/android, zweite Prüfung
 Codec-Abgleich, Rückkehr zur eigenen Sitzung auf durchgehender Zeitachse, schwarzes Halte-Segment mit
 fortlaufenden Zeitstempeln, Kopfzeilen und GQL-Weiterleitung über die Seite, Hänger-Hilfe,
 Display-Ads, VOD-Werbung) sind nachgebaut nach **[TTV-AB](https://github.com/GosuDRM/TTV-AB) von
-Ebenfalls integriert: das Vortäuschen gesehener Werbung an Twitch (Ad-Spoofing via `ClientSideAdEventHandling_RecordAdEvent`, siehe TTV-AB).
+GosuDRM** (MIT-Lizenz mit Namensnennung). Der Code hier ist eine eigene, kleinere Umsetzung; das
+Halte-Segment ist selbst erzeugt (Befehl in `site_scripts.py`). Ebenfalls nach TTV-AB, aber nur als
+Einstellung (standardmäßig aus): das Melden gesehener Werbung an Twitch (Ad-Spoofing über
+`ClientSideAdEventHandling_RecordAdEvent`).

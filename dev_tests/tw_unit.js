@@ -18,6 +18,15 @@ function check(name, ok, detail) {
     console.log((ok ? 'PASS ' : 'FAIL ') + name + (detail ? '  [' + detail + ']' : ''));
 }
 
+// twitch_main.js is not run here, but must at least parse (a merge once dropped a "};" and the
+// whole Twitch script stopped working)
+try {
+    new Function(fs.readFileSync(path.join(APP, 'scripts/twitch_main.js'), 'utf8'));
+    check('0 scripts/twitch_main.js parses', true);
+} catch (e) {
+    check('0 scripts/twitch_main.js parses', false, e.message);
+}
+
 // ---- simulated Twitch ----
 // Content index c = 2 s of stream at T0 + 2c s. Each session numbers its segments c + delta.
 const T0 = Date.parse('2026-10-04T16:00:00.000Z');
@@ -394,7 +403,7 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
         check('10b other requests are not touched', await (await w.fetch('https://example.com/a')).text() === 'hello');
     }
 
-    // 11) Ad Spoofing (TTV-AB technique): reports impressions, quartiles & pod complete to Twitch GQL
+    // 11) Ad Spoofing (TTV-AB technique, a setting): reports impressions, quartiles & pod complete to Twitch GQL
     {
         const world = makeWorld({
             ads: {native: () => true}
@@ -407,7 +416,7 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
             }
             return origRoutes(url, init);
         };
-        const w = makeWorker(world);
+        const w = makeWorker(world, {adSpoofing: true});
         const t = w.__abTwitchTest;
 
         // 11a attribute parser
@@ -448,6 +457,17 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
         // 11f broadcast event sent
         check('11f ad-spoofed event reported on channel',
               w.events.some(e => e.event === 'ad-spoofed' && e.id === 'stitched-ad-1791129837-15235000000'));
+
+        // 11g off by default: without the setting nothing is reported
+        const world2 = makeWorld({ads: {native: () => true}});
+        world2.spoofBatches = [];
+        const origRoutes2 = world2.routes;
+        world2.routes = (url, init) => url.indexOf('ORIGINAL-') !== -1 ? adMedia : origRoutes2(url, init);
+        const w2 = makeWorker(world2);
+        await w2.fetch(USHER);
+        await w2.fetch(ORIG('720'));
+        check('11g without the setting no spoofing batch is sent',
+              world2.spoofBatches.length === 0 && !w2.events.some(e => e.event === 'ad-spoofed'));
     }
 
     console.log(`\n${passed} passed, ${failed} failed`);
