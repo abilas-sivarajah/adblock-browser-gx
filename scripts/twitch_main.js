@@ -41,6 +41,32 @@
         }
     }
 
+    function currentPlayerState() {
+        const v = playerVideo();
+        return {
+            event: 'player-state',
+            mute: !!(v && v.muted),
+            volume: v && typeof v.volume === 'number' ? v.volume : 1,
+            visible: !document.hidden
+        };
+    }
+
+    function pushPlayerState() {
+        post(currentPlayerState());
+    }
+
+    function setSpoofing(enabled) {
+        CFG.adSpoofing = !!enabled;
+        post({event: 'set-spoofing', enabled: !!enabled});
+    }
+    window.__abTwitchSetSpoofing = setSpoofing;
+
+    window.addEventListener('message', function (e) {
+        if (e.source !== window || !e.data || e.data.source !== 'adblock-gx') return;
+        if (e.data.type === 'twitch-spoofing') setSpoofing(e.data.enabled);
+    });
+    document.addEventListener('visibilitychange', pushPlayerState);
+
     function playerBox() {
         return document.querySelector('[data-a-target="video-player"]') || document.querySelector('.video-player__container');
     }
@@ -354,6 +380,7 @@
         const limit = Date.now() < watch.armedUntil ? 4 : 8;
         if (watch.stuck >= limit && Date.now() - watch.lastAction > 8000) fixStall(video);
     }, 1000);
+    setInterval(pushPlayerState, 2000);
 
     // ---- messages from the hooked player worker ----
     const lastLogged = {};  // event kind -> time, so the ad log gets one line per ad break, not one per playlist refresh
@@ -370,7 +397,7 @@
         channel.onmessage = function (e) {
             const d = e.data || {};
             switch (d.event) {
-                case 'worker-hooked': stats.hookedWorkers++; break;
+                case 'worker-hooked': stats.hookedWorkers++; pushPlayerState(); break;
                 case 'seen-master': stats.masters++; break;
                 case 'seen-playlist': stats.playlists++; break;
                 case 'fetch-request': relay(d); break;

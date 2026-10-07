@@ -31,6 +31,7 @@ class AdBlockDialog(QDialog):
         self.accent = accent
         self.initial_tab = initial_tab
         self.settings_changed = False
+        self.needs_reload = False
         self.update_finished.connect(self.on_update_finished)
         
         self.setWindowTitle("AdBlock Shield & Datenschutz")
@@ -151,7 +152,7 @@ class AdBlockDialog(QDialog):
         self.spoof_check = QCheckBox("Twitch: blockierte Werbung als gesehen melden (Ad-Spoofing)")
         self.spoof_check.setChecked(self.filter_engine.ad_spoofing)
         self.spoof_check.setToolTip("Meldet Twitch mit deinem Konto Werbung als vollständig gesehen, die nie lief.\n"
-                                    "Kann gegen die Nutzungsbedingungen von Twitch verstoßen. Wirkt nach dem Neuladen.")
+                                    "Kann gegen die Nutzungsbedingungen von Twitch verstoßen. Wirkt sofort, ohne Neuladen.")
         self.spoof_check.toggled.connect(self.on_spoofing_toggled)
         ctrl_layout.addWidget(self.spoof_check)
 
@@ -185,11 +186,13 @@ class AdBlockDialog(QDialog):
             wl.add(host)
         self.filter_engine.save_config()
         self.settings_changed = True
+        self.needs_reload = True
 
     def on_global_toggled(self, checked: bool):
         self.filter_engine.is_enabled = checked
         self.filter_engine.save_config()
         self.settings_changed = True
+        self.needs_reload = True
 
     def on_spoofing_toggled(self, checked: bool):
         self.filter_engine.ad_spoofing = checked
@@ -334,6 +337,7 @@ class AdBlockDialog(QDialog):
                     self.filter_engine.whitelist.remove(d)
                     self.filter_engine.save_config()
                     self.settings_changed = True
+                    self.needs_reload = True
                     table.removeRow(table.row(selected[0]))
         btn_remove.clicked.connect(remove_selected)
         layout.addWidget(btn_remove)
