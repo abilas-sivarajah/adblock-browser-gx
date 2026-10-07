@@ -27,13 +27,21 @@ Sie hat ein **eigenes Profil** (`browser_data\`), Cookies/Verlauf werden nicht g
 - **Popup-Blocker** – Fenster, die eine Seite ohne Klick öffnen will, werden verworfen.
   Links mit `target=_blank` öffnen weiter als neuer Tab.
 - **Twitch ohne Video-Werbung** – Twitch schneidet Werbung in den Live-Stream
-  (`scripts/twitch_*.js`). Der Browser hängt sich in den Video-Worker des Players:
-  - Werbung nur in *deiner* Sitzung (z. B. beim Öffnen eines Kanals): derselbe Stream wird über
-    einen anderen Player-Zugang ohne Werbung geholt (popout → frontpage → autoplay) und bleibt
-    dann für den Kanal in Benutzung.
-  - Werbepause des Streamers (gilt für alle Zugänge gleichzeitig, meist 30–60 s): der Player
-    wird abgedeckt und stumm geschaltet, mit Hinweis „Twitch-Werbepause … seit 0:08“. Danach
-    läuft der Stream automatisch weiter.
+  (`scripts/twitch_*.js`, Techniken nach [TTV-AB](https://github.com/GosuDRM/TTV-AB)). Der Browser
+  hängt sich in den Video-Worker des Players:
+  - Werbung nur in *deiner* Sitzung (z. B. beim Öffnen eines Kanals): derselbe Stream kommt sofort
+    über den 360p-Zugang „autoplay“ (Hinweis „Werbung übersprungen – kurz in 360p“), nach einer
+    zweiten Prüfung in voller Qualität über einen anderen Player-Zugang (popout → frontpage →
+    mobile_web → site). Ist die eigene Sitzung wieder werbefrei, geht es dorthin zurück – ohne
+    Hänger: alle Quellen laufen auf einer durchgehenden Segment-Zählung, zeitlich passend
+    aneinandergesetzt (nichts doppelt, nichts übersprungen).
+  - Werbepause des Streamers (gilt für alle Zugänge gleichzeitig, meist 30–60 s): die Werbung wird
+    herausgeschnitten und durch schwarzes, stummes Bild ersetzt, mit Hinweis „Twitch-Werbepause …
+    seit 0:08“. Danach läuft der Stream live weiter. (Streams in fMP4/HEVC/AV1: Werbung abgedeckt und
+    stumm.)
+  - Außerdem: Twitchs eigene Kopfzeilen für die Ersatz-Anfragen (Anmeldung nur, wenn ein Stream
+    anonym nicht geht), Neustart-Hilfe bei hängendem Video, Werbebanner/„Stream Display Ads“
+    ausgeblendet, VOD-Werbung (VAST) blockiert.
 - **YouTube ohne Werbung** – die Werbe-Daten (`adPlacements`, `playerAds`, `adSlots`) werden
   aus den Player-Antworten entfernt, bevor der Player sie sieht (`scripts/youtube.js`).
   Werbeblöcke in Startseite/Sidebar und der „Werbeblocker“-Hinweis werden ausgeblendet.
@@ -188,6 +196,7 @@ AdBlockBrowser/
 ├── scripts/
 │   ├── twitch_main.js    # Twitch: hängt sich in den Video-Worker des Players
 │   ├── twitch_worker.js  # Twitch: Werbe-Playlists erkennen, werbefreien Stream einsetzen
+│   ├── twitch_hold.ts    # Twitch: 1 s schwarzes Bild statt Werbung (MPEG-TS)
 │   ├── youtube.js        # YouTube: Werbe-Daten entfernen, Fallback, Werbeblöcke ausblenden
 │   ├── netflix.js        # Netflix: Werbepausen + Pausen-Werbung entfernen, Abdecken, Hänger-Absicherung
 │   ├── ad_watch.js       # erkennt durchgerutschte Werbung und meldet sie ans Protokoll
@@ -212,13 +221,22 @@ AdBlockBrowser/
   dann einige Sekunden Ladekreis (gemessen 0–21 s; ohne Blocker liefen 12–23 s Werbung).
   Das lässt sich vom Browser aus nicht zuverlässig umgehen.
 - **Twitch:** Während einer Werbepause des Streamers bekommt jeder Player-Zugang Werbung – es gibt
-  dann keine werbefreie Quelle. Der Browser blendet sie aus, die Wartezeit bleibt aber (gemessen
-  35–45 s). Twitch ändert seinen Player regelmäßig; wenn wieder etwas nicht stimmt: Werbe-Protokoll
-  ansehen oder F12 → Konsole → `window.__abTwitch` (`adBreaks`, `replaced`, `masked`,
-  `backupTrail`, `errors`). Die Ersatz-Zugänge stehen in `site_scripts.py` (`TWITCH_BACKUP_TYPES`).
+  dann keine werbefreie Quelle. Der Browser ersetzt sie durch schwarzes Bild, die Wartezeit bleibt
+  aber (gemessen 35–45 s). Twitch ändert seinen Player regelmäßig; wenn wieder etwas nicht stimmt:
+  Werbe-Protokoll ansehen oder F12 → Konsole → `window.__abTwitch` (`adBreaks`, `replaced`,
+  `bridges`, `holds`, `masked`, `nativeReturns`, `stallFixes`, `backupTrail`, `errors`). Die
+  Ersatz-Zugänge stehen in `site_scripts.py` (`TWITCH_BACKUP_TYPES`).
 - **Netflix** zeigt nicht bei jedem Start Werbung, getestet wurde vor allem die Werbung vor
   dem Titel. Werbung mitten im Film war in den Tests nicht zu sehen (auch nach Vorspulen auf
   20/45/75 min nicht). Falls doch: Werbe-Protokoll ansehen oder F12 → Konsole →
   `window.__abNetflix` (`breaksRemoved`, `seen` mit den Positionen der Pausen, `adsShown`,
   `pauseAdsRemoved` / `pauseAdsHidden` für die Pausen-Werbung).
 - Scriptlets (`##+js(...)`) aus den Listen werden nicht ausgeführt.
+
+## 🙏 Danksagung
+
+Die Twitch-Techniken (360p-Brücke über „autoplay“/android, zweite Prüfung vor voller Qualität,
+Codec-Abgleich, Rückkehr zur eigenen Sitzung auf durchgehender Zeitachse, schwarzes Halte-Segment mit
+fortlaufenden Zeitstempeln, Kopfzeilen und GQL-Weiterleitung über die Seite, Hänger-Hilfe,
+Display-Ads, VOD-Werbung) sind nachgebaut nach **[TTV-AB](https://github.com/GosuDRM/TTV-AB) von
+Ebenfalls integriert: das Vortäuschen gesehener Werbung an Twitch (Ad-Spoofing via `ClientSideAdEventHandling_RecordAdEvent`, siehe TTV-AB).
