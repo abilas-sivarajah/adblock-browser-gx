@@ -37,12 +37,14 @@ def twitch_worker_script() -> str:
     return _read("twitch_worker.js").replace("__AB_HOLD_SEGMENT__", json.dumps(hold))
 
 
-def build_site_scripts(enabled: bool, whitelist) -> list[str]:
+def build_site_scripts(enabled: bool, whitelist, ad_spoofing: bool = False) -> list[str]:
+    """ad_spoofing: report blocked Twitch ads as watched (TTV-AB technique) - with the viewer's
+    login, so it is a setting of its own and off by default."""
     config = json.dumps({
         "enabled": bool(enabled),
         "whitelist": sorted(whitelist),
         "twitchBackupTypes": TWITCH_BACKUP_TYPES,
-        "adSpoofing": True,
+        "adSpoofing": bool(ad_spoofing),
     })
     twitch = (_read("twitch_main.js")
               .replace("__AB_CONFIG__", config)

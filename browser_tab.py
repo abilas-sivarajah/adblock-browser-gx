@@ -253,7 +253,7 @@ class BrowserTab(QWidget):
                 core.RemoveScriptToExecuteOnDocumentCreated(task.Result)
         fe = self.filter_engine
         self._site_script_tasks = [core.AddScriptToExecuteOnDocumentCreatedAsync(js)
-                                   for js in build_site_scripts(fe.is_enabled, fe.whitelist)]
+                                   for js in build_site_scripts(fe.is_enabled, fe.whitelist, fe.ad_spoofing)]
 
     def _hook_accelerator_keys(self):
         # The WinForms control keeps its CoreWebView2Controller private; we need its

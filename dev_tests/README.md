@@ -13,7 +13,7 @@ ohne Fokus, stumm) und werden über das Chrome-DevTools-Protokoll (Port 9333) ge
 | Datei | Prüft |
 |---|---|
 | `node nf_unit.js` | `scripts/netflix.js`: Werbepausen, Abdecken, Hänger-Absicherung, Pausen-Werbung (29 Tests) |
-| `node tw_unit.js` | `scripts/twitch_worker.js` mit echten Twitch-Playlists (`tw_ad_*.m3u8`) und simulierten Sitzungen: 360p-Brücke, volle Qualität nach zweiter Prüfung, Rückkehr zur eigenen Sitzung, durchgehende Zählung, schwarzes Halte-Segment, fMP4/HEVC, Anmeldung nur bei Bedarf, GQL über die Seite, VOD (41 Tests) |
+| `node tw_unit.js` | `scripts/twitch_worker.js` mit echten Twitch-Playlists (`tw_ad_*.m3u8`) und simulierten Sitzungen: 360p-Brücke, volle Qualität nach zweiter Prüfung, Rückkehr zur eigenen Sitzung, durchgehende Zählung, schwarzes Halte-Segment, fMP4/HEVC, Anmeldung nur bei Bedarf, GQL über die Seite, VOD, Ad-Spoofing (nur mit Einstellung); dazu: `twitch_main.js` ohne Syntaxfehler (49 Tests) |
 
 ## Mit Testprofil
 

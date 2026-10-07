@@ -9,6 +9,8 @@
 // - a watchdog for a stuck video: jump over a buffer gap, pause/play, at last reload the player;
 // - hiding Twitch's display ads (banner, "stream display ad" frame, Amazon video ads) and
 //   blocking the VAST ad requests of VODs.
+// Optional (CFG.adSpoofing, off unless switched on in the settings): the worker reports blocked
+// ads to Twitch as watched - with the viewer's login, see twitch_worker.js.
 // Statistics for the shield / tests: window.__abTwitch
 (function () {
     'use strict';
@@ -439,51 +441,9 @@
                     if (stats.errors.length > 20) stats.errors.shift();
                     break;
             }
+        };
     }
 
-    // Sniff Twitch page's GQL fetch headers (Client-Integrity, Authorization, etc.)
-    // and broadcast them to the player worker for authenticated requests and ad spoofing.
-    try {
-        const origFetch = window.fetch;
-        let lastHeaders = {};
-        window.fetch = function (input, init) {
-            try {
-                const url = typeof input === 'string' ? input : (input && input.url) || '';
-                if (url.indexOf('gql.twitch.tv') !== -1 && init && init.headers) {
-                    const h = init.headers;
-                    const getHeader = function (name) {
-                        if (!h) return null;
-                        if (typeof h.get === 'function') return h.get(name);
-                        if (Array.isArray(h)) {
-                            const entry = h.find(function (r) { return r && String(r[0] || '').toLowerCase() === name.toLowerCase(); });
-                            return entry ? entry[1] : null;
-                        }
-                        if (typeof h === 'object') {
-                            return h[name] || h[name.toLowerCase()] || null;
-                        }
-                        return null;
-                    };
-                    const integrity = getHeader('Client-Integrity');
-                    const auth = getHeader('Authorization');
-                    const version = getHeader('Client-Version');
-                    const session = getHeader('Client-Session-Id');
-                    const dev = getHeader('X-Device-Id');
-                    let changed = false;
-                    const updates = {};
-                    if (integrity && integrity !== lastHeaders.integrity) { updates.integrity = integrity; changed = true; }
-                    if (auth && auth !== lastHeaders.auth) { updates.auth = auth; changed = true; }
-                    if (version && version !== lastHeaders.version) { updates.version = version; changed = true; }
-                    if (session && session !== lastHeaders.session) { updates.session = session; changed = true; }
-                    if (dev && dev !== lastHeaders.device) { updates.device = dev; changed = true; }
-                    if (changed && channel) {
-                        Object.assign(lastHeaders, updates);
-                        try { channel.postMessage({event: 'update-headers', headers: updates}); } catch (e) {}
-                    }
-                }
-            } catch (e) {}
-            return origFetch.apply(this, arguments);
-        };
-    } catch (e) {}
 
     function toHost(kind, details) {
         try {
@@ -514,7 +474,7 @@
             backupTypes: CFG.twitchBackupTypes,
             channel: CHANNEL,
             vod: isVod(),
-            adSpoofing: CFG.adSpoofing !== false
+            adSpoofing: CFG.adSpoofing === true  // off unless switched on in the settings
         });
         return WORKER_HOOK.replace('__AB_WORKER_INIT__', function () { return init; });
     }
