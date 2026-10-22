@@ -7,7 +7,7 @@ const S = __dirname;
 const HOLD_B64 = fs.readFileSync(path.join(APP, 'scripts/twitch_hold.ts')).toString('base64');
 const SRC = fs.readFileSync(path.join(APP, 'scripts/twitch_worker.js'), 'utf8')
     .replace('__AB_HOLD_SEGMENT__', JSON.stringify(HOLD_B64));
-const TIMING = {proof: 0, hqDwell: 0, search: 400, fetch: 1000};
+const TIMING = {proof: 0, hqDwell: 0, search: 400, fetch: 1000, spoofRealtime: false, spoofHeaderWait: 0, spoofRetry: 0};
 
 const adMaster = fs.readFileSync(path.join(S, 'tw_ad_master.m3u8'), 'utf8');
 const adMedia = fs.readFileSync(path.join(S, 'tw_ad_media.m3u8'), 'utf8');
@@ -94,7 +94,12 @@ function makeWorld(over) {
             if (world.gqlFails) throw new TypeError('Failed to fetch');
             const body = JSON.parse(init.body);
             if (Array.isArray(body)) {
+                if (world.spoofFailCount > 0) {
+                    world.spoofFailCount--;
+                    throw new TypeError('Failed to fetch');
+                }
                 if (world.spoofBatches) world.spoofBatches.push(body);
+                if (world.spoofHeaders) world.spoofHeaders.push(init && init.headers);
                 return body.map(() => ({data: {recordAdEvent: true}}));
             }
             const t = body.variables.playerType;
@@ -138,7 +143,7 @@ function makeWorker(world, init) {
         if (body === 404) return new Response('gone', {status: 404});
         return new Response(typeof body === 'string' ? body : JSON.stringify(body), {status: 200});
     };
-    const cfg = Object.assign({clientId: 'test', deviceId: 'dev', backupTypes: ['popout', 'frontpage', 'mobile_web', 'site', 'autoplay'],
+    const cfg = Object.assign({clientId: 'test', deviceId: 'dev12345', backupTypes: ['popout', 'frontpage', 'mobile_web', 'site', 'autoplay'],
                                channel: 't', timing: TIMING}, init || {});
     new Function('self', 'BroadcastChannel', SRC.replace('__AB_WORKER_INIT__', JSON.stringify(cfg)))(self, FakeChannel);
     self.events = events;
@@ -351,7 +356,7 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
         await poll(w, player, world);
         const h = world.gqlHeaders;
         check('7 anonymous first, then with the viewer\'s login (forbidden)', h.length === 2 && !h[0].Authorization && h[1].Authorization === 'OAuth abc' &&
-              h[0]['Client-Version'] === 'v1' && h[0]['Client-Session-Id'] === 's1' && h[0]['X-Device-Id'] === 'dev');
+              h[0]['Client-Version'] === 'v1' && h[0]['Client-Session-Id'] === 's1' && h[0]['X-Device-Id'] === 'dev12345');
     }
 
     // 8) GQL from the worker fails -> relayed through the page
@@ -416,8 +421,9 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
             }
             return origRoutes(url, init);
         };
-        const w = makeWorker(world, {adSpoofing: true});
+        const w = makeWorker(world, {adSpoofing: true, relay: false});
         const t = w.__abTwitchTest;
+        const names = () => world.spoofBatches.reduce((acc, b) => acc.concat(b.map((p) => p.variables.input.eventName)), []);
 
         // 11a attribute parser
         const parsed = t.parseAttrs('#EXT-X-DATERANGE:ID="stitched-ad-test",CLASS="twitch-stitched-ad",DURATION=15.235,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"');
@@ -428,26 +434,22 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
         await w.fetch(USHER);
         await w.fetch(ORIG('720'));
 
-        check('11b ad playlist triggers GQL ad spoofing batch', world.spoofBatches.length >= 1);
-        const batch = world.spoofBatches[0];
-        check('11c batch contains impression, 4 quartiles and pod complete',
-              batch && batch.length === 6 &&
-              batch[0].variables.input.eventName === 'video_ad_impression' &&
-              batch[1].variables.input.eventName === 'video_ad_quartile_complete' &&
-              batch[2].variables.input.eventName === 'video_ad_quartile_complete' &&
-              batch[3].variables.input.eventName === 'video_ad_quartile_complete' &&
-              batch[4].variables.input.eventName === 'video_ad_quartile_complete' &&
-              batch[5].variables.input.eventName === 'video_ad_pod_complete');
+        check('11b one GQL request carries impression, quartiles and pod complete',
+              world.spoofBatches.length === 1 && names().length === 6);
+        check('11c events are impression, 4 quartiles and pod complete',
+              names().join(',') === 'video_ad_impression,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_pod_complete');
+        check('11c preroll: exactly one ad segment is fetched and discarded',
+              world.log.filter((l) => l.indexOf('/v1/segment/') !== -1).length === 1);
 
-        const firstPayload = batch ? JSON.parse(batch[0].variables.input.eventPayload) : {};
+        const firstPayload = world.spoofBatches[0] ? JSON.parse(world.spoofBatches[0][0].variables.input.eventPayload) : {};
         check('11d packet payload contains stitched ad details and RADS token',
               firstPayload.stitched === true &&
               firstPayload.ad_id === 'stitched-ad-1791129837-15235000000' &&
               firstPayload.roll_type === 'preroll' &&
               firstPayload.creative_id === '2488883100494' &&
               firstPayload.duration === 15 &&
-              batch[0].variables.input.radToken.startsWith('eyJhbGci') &&
-              batch[0].extensions.persistedQuery.sha256Hash === '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b');
+              world.spoofBatches[0][0].variables.input.radToken.startsWith('eyJhbGci') &&
+              world.spoofBatches[0][0].extensions.persistedQuery.sha256Hash === '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b');
 
         // 11e deduplication: second poll of the same playlist does not send another batch
         const countBefore = world.spoofBatches.length;
@@ -463,11 +465,148 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
         world2.spoofBatches = [];
         const origRoutes2 = world2.routes;
         world2.routes = (url, init) => url.indexOf('ORIGINAL-') !== -1 ? adMedia : origRoutes2(url, init);
-        const w2 = makeWorker(world2);
+        const w2 = makeWorker(world2, {relay: false});
         await w2.fetch(USHER);
         await w2.fetch(ORIG('720'));
         check('11g without the setting no spoofing batch is sent',
               world2.spoofBatches.length === 0 && !w2.events.some(e => e.event === 'ad-spoofed'));
+
+        function stitched(ads) {
+            return '#EXTM3U\n' + ads.map((a) => {
+                let line = '#EXT-X-DATERANGE:ID="' + a.id + '",CLASS="twitch-stitched-ad",DURATION=' + (a.duration || 12) +
+                    ',X-TV-TWITCH-AD-ROLL-TYPE="' + (a.roll || 'MIDROLL') + '"';
+                if (a.pod) line += ',X-TV-TWITCH-AD-POD-LENGTH="' + a.pod + '"';
+                if (a.pos != null) line += ',X-TV-TWITCH-AD-POD-POSITION="' + a.pos + '"';
+                if (a.rad) line += ',X-TV-TWITCH-AD-RADS-TOKEN="' + a.rad + '"';
+                if (a.creative) line += ',X-TV-TWITCH-AD-CREATIVE-ID="' + a.creative + '"';
+                return line;
+            }).join('\n') + '\n';
+        }
+
+        // 11h second pod after endAd: new IDs are spoofed again
+        {
+            const worldH = makeWorld();
+            worldH.spoofBatches = [];
+            const wH = makeWorker(worldH, {adSpoofing: true, relay: false});
+            const tH = wH.__abTwitchTest;
+            await tH.notifyAdComplete(stitched([{id: 'stitched-ad-pod1', pod: 1, pos: 0, rad: 'tok-1'}]));
+            const afterFirst = worldH.spoofBatches.length;
+            tH.resetSpoofPod();
+            await tH.notifyAdComplete(stitched([{id: 'stitched-ad-pod2', pod: 1, pos: 0, rad: 'tok-2'}]));
+            check('11h second pod after reset is spoofed',
+                  afterFirst === 1 && worldH.spoofBatches.length === afterFirst + 1 &&
+                  worldH.spoofBatches[afterFirst][0].variables.input.radToken === 'tok-2');
+        }
+
+        // 11i bounce: same IDs after reset do not re-send impression, but missing pod_complete is healed
+        {
+            const worldB = makeWorld();
+            worldB.spoofBatches = [];
+            const wB = makeWorker(worldB, {adSpoofing: true, relay: false});
+            const tB = wB.__abTwitchTest;
+            const pl = stitched([{id: 'stitched-ad-bounce', pod: 1, pos: 0, rad: 'tok-b'}]);
+            await tB.notifyAdComplete(pl);
+            const n = worldB.spoofBatches.length;
+            const pods = worldB.spoofBatches.reduce((k, b) => k + b.filter((p) => p.variables.input.eventName === 'video_ad_pod_complete').length, 0);
+            tB.resetSpoofPod();
+            await tB.notifyAdComplete(pl);
+            const podsAfter = worldB.spoofBatches.reduce((k, b) => k + b.filter((p) => p.variables.input.eventName === 'video_ad_pod_complete').length, 0);
+            check('11i bounce does not re-spoof the same ad, pod_complete stays once',
+                  worldB.spoofBatches.length === n && n === 1 && pods === 1 && podsAfter === 1);
+        }
+
+        // 11j missing RADS token: nothing is sent
+        {
+            const worldM = makeWorld();
+            worldM.spoofBatches = [];
+            const wM = makeWorker(worldM, {adSpoofing: true, relay: false});
+            await wM.__abTwitchTest.notifyAdComplete(stitched([{id: 'stitched-ad-notoken', pod: 1, pos: 0}]));
+            check('11j missing RADS token sends no GQL', worldM.spoofBatches.length === 0);
+        }
+
+        // 11k GQL failure is retried
+        {
+            const worldR = makeWorld();
+            worldR.spoofBatches = [];
+            worldR.spoofFailCount = 1;
+            const wR = makeWorker(worldR, {adSpoofing: true, relay: false});
+            await wR.__abTwitchTest.notifyAdComplete(stitched([{id: 'stitched-ad-retry', pod: 1, pos: 0, rad: 'tok-r'}]));
+            check('11k first GQL failure is retried',
+                  worldR.spoofFailCount === 0 && worldR.spoofBatches.length === 1 &&
+                  worldR.spoofBatches[0][0].variables.input.eventName === 'video_ad_impression' &&
+                  worldR.spoofBatches[0][5].variables.input.eventName === 'video_ad_pod_complete');
+        }
+
+        // 11l player mute/volume/visibility is copied into the payload
+        {
+            const worldP = makeWorld();
+            worldP.spoofBatches = [];
+            const wP = makeWorker(worldP, {adSpoofing: true, relay: false});
+            Object.assign(wP.__abTwitchTest.playerState, {mute: true, volume: 0.25, visible: false});
+            await wP.__abTwitchTest.notifyAdComplete(stitched([{id: 'stitched-ad-state', pod: 1, pos: 0, rad: 'tok-s'}]));
+            const payload = JSON.parse(worldP.spoofBatches[0][0].variables.input.eventPayload);
+            check('11l payload mirrors mute, volume and visibility',
+                  payload.player_mute === true && payload.player_volume === 0.25 && payload.visible === false);
+        }
+
+        // 11m Device-ID "oauth" / too short is not sent
+        {
+            const wD = makeWorker(makeWorld(), {adSpoofing: true, relay: false, deviceId: 'oauth'});
+            const headers = wD.__abTwitchTest.gqlHeaders(true);
+            check('11m invalid Device-ID is omitted (never "oauth")',
+                  headers['X-Device-Id'] == null && headers['Device-ID'] == null &&
+                  wD.__abTwitchTest.validDeviceId('oauth') === false &&
+                  wD.__abTwitchTest.validDeviceId('dev12345') === true);
+        }
+
+        // 11n runtime toggle without reload
+        {
+            const worldT = makeWorld();
+            worldT.spoofBatches = [];
+            const wT = makeWorker(worldT, {adSpoofing: false, relay: false});
+            const pl = stitched([{id: 'stitched-ad-toggle', pod: 1, pos: 0, rad: 'tok-t'}]);
+            await wT.__abTwitchTest.notifyAdComplete(pl);
+            check('11n off: runtime-disabled worker sends nothing', worldT.spoofBatches.length === 0);
+            wT.pageSend({event: 'set-spoofing', enabled: true});
+            await wT.__abTwitchTest.notifyAdComplete(pl);
+            check('11n on: BroadcastChannel toggle enables spoofing without reload', worldT.spoofBatches.length === 1);
+        }
+
+        // 11o a two-ad pod: pod_complete rides only on the request that fills the pod
+        {
+            const worldO = makeWorld();
+            worldO.spoofBatches = [];
+            const wO = makeWorker(worldO, {adSpoofing: true, relay: false});
+            await wO.__abTwitchTest.notifyAdComplete(stitched([
+                {id: 'stitched-ad-a', pod: 2, pos: 0, rad: 'tok-a'},
+                {id: 'stitched-ad-b', pod: 2, pos: 1, rad: 'tok-b'},
+            ]));
+            const lens = worldO.spoofBatches.map((b) => b.map((p) => p.variables.input.eventName));
+            check('11o pod_complete is sent once, with the last ad',
+                  lens.length === 2 && lens[0].length === 5 && lens[0].indexOf('video_ad_pod_complete') === -1 &&
+                  lens[1][lens[1].length - 1] === 'video_ad_pod_complete');
+        }
+
+        // 11p preroll bytes are fetched; a midroll is not
+        {
+            function withMedia(base, adUrl, liveUrl) {
+                return base + '#EXTINF:2.000,Amazon|1\n' + adUrl + '\n#EXTINF:2.000,live\n' + liveUrl + '\n';
+            }
+            const worldP2 = makeWorld();
+            const wP2 = makeWorker(worldP2, {adSpoofing: true, relay: false});
+            await wP2.__abTwitchTest.notifyAdComplete(withMedia(
+                stitched([{id: 'stitched-ad-pre', pod: 1, pos: 0, rad: 'tok-pre', roll: 'PREROLL'}]),
+                'https://cdn.example/ad-preroll.ts', 'https://cdn.example/live-pre.ts'));
+            const worldMid = makeWorld();
+            const wMid = makeWorker(worldMid, {adSpoofing: true, relay: false});
+            await wMid.__abTwitchTest.notifyAdComplete(withMedia(
+                stitched([{id: 'stitched-ad-mid', pod: 1, pos: 0, rad: 'tok-mid', roll: 'MIDROLL'}]),
+                'https://cdn.example/ad-mid.ts', 'https://cdn.example/live-mid.ts'));
+            check('11p preroll segment is fetched, live and midroll segments are not',
+                  worldP2.log.some((l) => l.indexOf('ad-preroll.ts') !== -1) &&
+                  !worldP2.log.some((l) => l.indexOf('live-pre.ts') !== -1) &&
+                  !worldMid.log.some((l) => l.indexOf('ad-mid.ts') !== -1));
+        }
     }
 
     console.log(`\n${passed} passed, ${failed} failed`);

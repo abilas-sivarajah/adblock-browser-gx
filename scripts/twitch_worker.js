@@ -48,13 +48,24 @@
         forbidden: 300000,    // ... when Twitch refuses the player type / codec does not match
         stalled: 10000,       // ... when the page reports the video stuck on it
         hqDwell: 8000,        // on the 360p bridge at least this long before searching full quality
-        nativeClean: 3        // own session ad-free for this many new playlists -> back to it
+        nativeClean: 3,       // own session ad-free for this many new playlists -> back to it
+        spoofRealtime: true,  // false in tests: wait until the spoof request and one preroll fetch finish
+        spoofHeaderWait: 1500,// first spoof waits this long for Client-Integrity from the page
+        spoofRetry: 400       // ms before retrying a failed spoof GQL
     }, INIT.timing || {});
     const AD_TEXT = /stitched-ad|X-TV-TWITCH-AD|\/adsquared\/|SCTE35-OUT|EXT-X-CUE-OUT|CLASS="twitch-(?:stitched-)?ad(?:-|")|"MIDROLL"/i;
-    const AD_SPOOFING_ENABLED = INIT.adSpoofing === true;  // setting, off by default
+    let AD_SPOOFING_ENABLED = INIT.adSpoofing === true;  // setting, off by default; togglable at runtime
     const GQL_EVENT_HASH = '7e6c69e6eb59f8ccb97ab73686f3d8b7d85a72a0298745ccd8bfc68e4054ca5b';
     const spoofedAdIds = new Set();
-    const recentSpoofedAdIds = new Map(); // adId -> timestamp, capped at 50
+    const spoofingInFlight = new Set();
+    const recentSpoofedAdIds = new Map(); // adId -> {at, radToken, payload, podLength}
+    const recentPodCompletes = new Set();
+    const requestedAdMedia = new Set();
+    let activePod = null;
+    let integrityWaited = false;
+    let warmTail = Promise.resolve();
+    let warmBlocked = false;
+    const playerState = {mute: false, volume: 1, visible: true};
 
     const realFetch = self.fetch.bind(self);
     const contexts = new Map();      // 'live:<login>' | 'vod:<id>' -> playback context
@@ -78,7 +89,13 @@
         channel.addEventListener('message', function (e) {
             const d = e.data || {};
             if (d.event === 'viewer') Object.assign(viewer, d.headers || {});
-            else if (d.event === 'page') pageIsVod = !!d.vod;
+            else if (d.event === 'player-state') {
+                if (typeof d.mute === 'boolean') playerState.mute = d.mute;
+                if (typeof d.volume === 'number' && isFinite(d.volume)) playerState.volume = d.volume;
+                if (typeof d.visible === 'boolean') playerState.visible = d.visible;
+            } else if (d.event === 'set-spoofing') {
+                AD_SPOOFING_ENABLED = !!d.enabled;
+            } else if (d.event === 'page') pageIsVod = !!d.vod;
             else if (d.event === 'fetch-response' && relayed.has(d.id)) relayed.get(d.id)(d);
             else if (d.event === 'stalled') onStalled();
         });
@@ -185,7 +202,215 @@
         return end || null;
     }
 
-    // ---- ad spoofing (TTV-AB technique, only if switched on): report ad impressions & quartiles to Twitch GQL ----
+    // ---- ad spoofing (TTV-AB technique, only if switched on) ----
+    // One GQL request per ad, sent immediately: impression + quartiles, and pod_complete in that
+    // same request once the pod is full. Waiting out the ad (or even a few seconds) lets Twitch
+    // keep the break and stitch the next one. Outside a midroll, one blocked ad segment is also
+    // fetched and discarded per playlist poll, so the CDN sees the preroll as delivered. A midroll
+    // stops those fetches. Failures retry via gql(). An id is stored only after the request is
+    // accepted. A bounced marker does not send the pod a second time.
+    function validDeviceId(id) {
+        return typeof id === 'string' && /^[a-z0-9]{8,64}$/i.test(id);
+    }
+
+    function rememberRecent(id, rec) {
+        recentSpoofedAdIds.set(id, rec);
+        while (recentSpoofedAdIds.size > 50) {
+            const oldest = recentSpoofedAdIds.keys().next().value;
+            if (oldest === undefined) break;
+            recentSpoofedAdIds.delete(oldest);
+        }
+    }
+
+    function podKeyOf(ids, podLength) {
+        const list = [];
+        ids.forEach(function (id) { list.push(id); });
+        list.sort();
+        return String(podLength) + ':' + list.join(',');
+    }
+
+    function openPod(hasExplicit, podLength) {
+        if (!activePod) {
+            activePod = {ids: new Set(), inFlight: new Set(), hasExplicit: hasExplicit, length: podLength,
+                         completeSent: false, token: '', payload: null};
+        } else {
+            activePod.hasExplicit = hasExplicit;
+            activePod.length = podLength;
+        }
+        return activePod;
+    }
+
+    function resetSpoofPod() {
+        activePod = null;
+        spoofedAdIds.clear();
+        warmBlocked = false;
+    }
+
+    function makeSpoofPacket(eventName, radToken, payload, extra) {
+        return {
+            operationName: 'ClientSideAdEventHandling_RecordAdEvent',
+            variables: {
+                input: {
+                    eventName: eventName,
+                    eventPayload: JSON.stringify(Object.assign({}, payload, extra || {})),
+                    radToken: radToken,
+                },
+            },
+            extensions: {
+                persistedQuery: {
+                    version: 1,
+                    sha256Hash: GQL_EVENT_HASH,
+                },
+            },
+        };
+    }
+
+    function adEventBatch(radToken, payload, includePod) {
+        const events = [
+            ['video_ad_impression', null],
+            ['video_ad_quartile_complete', {quartile: 1}],
+            ['video_ad_quartile_complete', {quartile: 2}],
+            ['video_ad_quartile_complete', {quartile: 3}],
+            ['video_ad_quartile_complete', {quartile: 4}],
+        ];
+        if (includePod) events.push(['video_ad_pod_complete', null]);
+        return events.map(function (ev) { return makeSpoofPacket(ev[0], radToken, payload, ev[1]); });
+    }
+
+    async function waitForSpoofHeaders() {
+        if (integrityWaited) return;
+        integrityWaited = true;
+        if (viewer['Client-Integrity']) return;
+        const wait = T.spoofHeaderWait;
+        if (!wait) return;
+        const deadline = Date.now() + wait;
+        while (Date.now() < deadline && !viewer['Client-Integrity']) await sleep(50);
+    }
+
+    async function sendSpoofGql(packets, attempts) {
+        attempts = attempts || 0;
+        const body = Array.isArray(packets) ? packets : [packets];
+        try {
+            const json = await gql(body, true);
+            if (Array.isArray(json)) {
+                for (let i = 0; i < json.length; i++) {
+                    const entry = json[i];
+                    if (entry && entry.errors && !entry.data) throw new Error('GQL ad event rejected');
+                }
+            }
+            return true;
+        } catch (err) {
+            if (attempts < 2) {
+                await sleep(T.spoofRetry || 400);
+                return sendSpoofGql(body, attempts + 1);
+            }
+            report('error', {error: 'Ad spoofing failed: ' + (err && err.message || err)});
+            return false;
+        }
+    }
+
+    function notePodComplete(pod) {
+        const key = podKeyOf(pod.ids, pod.length);
+        recentPodCompletes.add(key);
+        while (recentPodCompletes.size > 30) {
+            const oldest = recentPodCompletes.keys().next().value;
+            if (oldest === undefined) break;
+            recentPodCompletes.delete(oldest);
+        }
+    }
+
+    async function maybePodComplete(pod) {
+        if (!AD_SPOOFING_ENABLED || !pod) return;
+        if (!pod.hasExplicit || pod.completeSent) return;
+        if (pod.ids.size < pod.length) return;
+        if (pod.inFlight.size) return;
+        if (!pod.token || !pod.payload) return;
+        const key = podKeyOf(pod.ids, pod.length);
+        if (recentPodCompletes.has(key)) {
+            pod.completeSent = true;
+            return;
+        }
+        pod.completeSent = true;
+        const ok = await sendSpoofGql(makeSpoofPacket('video_ad_pod_complete', pod.token, pod.payload, null));
+        if (!ok) {
+            pod.completeSent = false;
+            return;
+        }
+        notePodComplete(pod);
+    }
+
+    function currentSpoofPayload(stitchedAdId, attr, adPos, adDuration, podLength) {
+        const vol = typeof playerState.volume === 'number' && isFinite(playerState.volume) ? playerState.volume : 1;
+        return {
+            stitched: true,
+            ad_id: stitchedAdId,
+            roll_type: (attr['X-TV-TWITCH-AD-ROLL-TYPE'] || '').toLowerCase(),
+            creative_id: attr['X-TV-TWITCH-AD-CREATIVE-ID'] || '',
+            order_id: attr['X-TV-TWITCH-AD-ORDER-ID'] || '',
+            line_item_id: attr['X-TV-TWITCH-AD-LINE-ITEM-ID'] || '',
+            player_mute: !!playerState.mute,
+            player_volume: vol,
+            visible: playerState.visible !== false,
+            duration: adDuration,
+            ad_position: adPos,
+            total_ads: podLength,
+        };
+    }
+
+    // One non-live ad URL per poll. The chain keeps them serial so a preroll does not
+    // saturate the connection the clean stream needs.
+    function warmNextPrerollSegment(text) {
+        if (warmBlocked || !AD_SPOOFING_ENABLED) return;
+        const lines = text.replace(/\r/g, '').split('\n');
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line.startsWith('#EXTINF') || line.indexOf(',live') !== -1) continue;
+            const url = (lines[i + 1] || '').trim();
+            if (!url || url.charAt(0) === '#' || requestedAdMedia.has(url)) continue;
+            requestedAdMedia.add(url);
+            while (requestedAdMedia.size > 80) {
+                const oldest = requestedAdMedia.keys().next().value;
+                if (oldest === undefined) break;
+                requestedAdMedia.delete(oldest);
+            }
+            warmTail = warmTail.then(async function () {
+                if (warmBlocked || !AD_SPOOFING_ENABLED) return;
+                try {
+                    const resp = await realFetch(url);
+                    if (resp && typeof resp.arrayBuffer === 'function') await resp.arrayBuffer();
+                } catch (e) {}
+            });
+            return;
+        }
+    }
+
+    async function runAdSpoofs(pending, pod) {
+        await waitForSpoofHeaders();
+        const completeAt = pod.hasExplicit && (pod.ids.size + pending.length >= pod.length) ? pending.length - 1 : -1;
+        for (let i = 0; i < pending.length; i++) {
+            const item = pending[i];
+            if (!AD_SPOOFING_ENABLED) {
+                pod.inFlight.delete(item.id);
+                spoofingInFlight.delete(item.id);
+                return;
+            }
+            const includePod = i === completeAt && !pod.completeSent;
+            const ok = await sendSpoofGql(adEventBatch(item.radToken, item.payload, includePod));
+            pod.inFlight.delete(item.id);
+            spoofingInFlight.delete(item.id);
+            if (!ok) return;
+            rememberRecent(item.id, {at: Date.now(), radToken: item.radToken, payload: item.payload, podLength: pod.length});
+            pod.ids.add(item.id);
+            pod.token = item.radToken;
+            pod.payload = item.payload;
+            if (activePod === pod) spoofedAdIds.add(item.id);
+            if (includePod) {
+                pod.completeSent = true;
+                notePodComplete(pod);
+            }
+        }
+    }
+
     async function notifyAdComplete(text) {
         if (!AD_SPOOFING_ENABLED || !text || typeof text !== 'string') return;
         const lines = text.split('\n');
@@ -202,108 +427,68 @@
         const explicitPodLength = podLenMatch ? parseInt(podLenMatch[1], 10) : 0;
         const hasExplicitPodLength = explicitPodLength > 0;
         const podLength = hasExplicitPodLength ? explicitPodLength : adLines.length;
-
-        if (hasExplicitPodLength && spoofedAdIds.size >= podLength) return;
+        const pod = openPod(hasExplicitPodLength, podLength);
+        let sawMidroll = false;
 
         for (let i = 0; i < adLines.length; i++) {
-            if (hasExplicitPodLength && spoofedAdIds.size >= podLength) break;
+            const idMatch = adLines[i].match(/\bID="([^"]+)"/);
+            const bounceId = (idMatch && idMatch[1]) || parseAttrs(adLines[i])['ID'] || '';
+            if (!bounceId || !recentSpoofedAdIds.has(bounceId)) continue;
+            pod.ids.add(bounceId);
+            spoofedAdIds.add(bounceId);
+            const rec = recentSpoofedAdIds.get(bounceId);
+            if (rec && rec.radToken) {
+                pod.token = rec.radToken;
+                pod.payload = rec.payload || pod.payload;
+            }
+            if (rec && rec.payload && rec.payload.roll_type === 'midroll') sawMidroll = true;
+        }
+
+        if (hasExplicitPodLength && pod.ids.size >= podLength && pod.inFlight.size === 0) {
+            if (sawMidroll) warmBlocked = true;
+            else warmNextPrerollSegment(text);
+            await maybePodComplete(pod);
+            if (T.spoofRealtime === false) await warmTail;
+            return;
+        }
+
+        const pending = [];
+        for (let i = 0; i < adLines.length; i++) {
+            if (hasExplicitPodLength && pod.ids.size + pending.length >= podLength) break;
             const line = adLines[i];
             const attr = parseAttrs(line);
             const idMatch = line.match(/\bID="([^"]+)"/);
             const stitchedAdId = (idMatch && idMatch[1]) || attr['ID'] || '';
             if (!stitchedAdId) continue;
-
-            if (recentSpoofedAdIds.has(stitchedAdId)) {
-                spoofedAdIds.add(stitchedAdId);
-                continue;
-            }
-            if (spoofedAdIds.has(stitchedAdId)) continue;
+            if (pod.ids.has(stitchedAdId) || pod.inFlight.has(stitchedAdId)) continue;
 
             const radToken = attr['X-TV-TWITCH-AD-RADS-TOKEN'];
             if (!radToken) continue;
 
-            const rollType = (attr['X-TV-TWITCH-AD-ROLL-TYPE'] || '').toLowerCase();
             const adPos = parseInt(attr['X-TV-TWITCH-AD-POD-POSITION'] || String(i), 10) || 0;
             const dur = parseFloat(attr['X-TV-TWITCH-AD-DURATION'] || attr['DURATION'] || attr['X-TV-TWITCH-AD-POD-FILLED-DURATION'] || '0') || 0;
-            const adDuration = Math.round(dur);
-
-            const payload = {
-                stitched: true,
-                ad_id: stitchedAdId,
-                roll_type: rollType,
-                creative_id: attr['X-TV-TWITCH-AD-CREATIVE-ID'] || '',
-                order_id: attr['X-TV-TWITCH-AD-ORDER-ID'] || '',
-                line_item_id: attr['X-TV-TWITCH-AD-LINE-ITEM-ID'] || '',
-                player_mute: false,
-                player_volume: 1.0,
-                visible: true,
-                duration: adDuration,
-                ad_position: adPos,
-                total_ads: podLength,
-            };
-
-            const makePacket = function (eventName, extra) {
-                return {
-                    operationName: 'ClientSideAdEventHandling_RecordAdEvent',
-                    variables: {
-                        input: {
-                            eventName: eventName,
-                            eventPayload: JSON.stringify(Object.assign({}, payload, extra || {})),
-                            radToken: radToken,
-                        },
-                    },
-                    extensions: {
-                        persistedQuery: {
-                            version: 1,
-                            sha256Hash: GQL_EVENT_HASH,
-                        },
-                    },
-                };
-            };
-
-            spoofedAdIds.add(stitchedAdId);
-            recentSpoofedAdIds.set(stitchedAdId, Date.now());
-            while (recentSpoofedAdIds.size > 50) {
-                const oldest = recentSpoofedAdIds.keys().next().value;
-                if (oldest === undefined) break;
-                recentSpoofedAdIds.delete(oldest);
-            }
-
-            const batch = [
-                makePacket('video_ad_impression'),
-                makePacket('video_ad_quartile_complete', { quartile: 1 }),
-                makePacket('video_ad_quartile_complete', { quartile: 2 }),
-                makePacket('video_ad_quartile_complete', { quartile: 3 }),
-                makePacket('video_ad_quartile_complete', { quartile: 4 }),
-            ];
-            if (hasExplicitPodLength && spoofedAdIds.size >= podLength) {
-                batch.push(makePacket('video_ad_pod_complete'));
-            }
-
-            const headers = gqlHeaders(true);
-            if (!headers['X-Device-Id']) {
-                headers['X-Device-Id'] = headers['Device-ID'] || INIT.deviceId || 'oauth';
-            }
-
-            try {
-                realFetch(GQL_URL, {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify(batch),
-                }).then(function (response) {
-                    if (response && response.status !== 200) {
-                        report('error', {error: 'Ad spoofing GQL status ' + response.status});
-                    }
-                }).catch(function (err) {
-                    report('error', {error: 'Ad spoofing failed: ' + (err && err.message || err)});
-                });
-            } catch (err) {
+            const payload = currentSpoofPayload(stitchedAdId, attr, adPos, Math.round(dur), podLength);
+            if (payload.roll_type === 'midroll') sawMidroll = true;
+            pod.token = radToken;
+            pod.payload = payload;
+            pod.inFlight.add(stitchedAdId);
+            spoofingInFlight.add(stitchedAdId);
+            report('ad-spoofed', {count: 1, id: stitchedAdId, roll: payload.roll_type});
+            pending.push({id: stitchedAdId, radToken: radToken, payload: payload});
+        }
+        if (sawMidroll) warmBlocked = true;
+        else warmNextPrerollSegment(text);
+        const job = runAdSpoofs(pending, pod);
+        if (T.spoofRealtime === false) {
+            await job;
+            await warmTail;
+        } else {
+            job.catch(function (err) {
                 report('error', {error: 'Ad spoofing sync error: ' + (err && err.message || err)});
-            }
-
-            report('ad-spoofed', {count: 1, id: stitchedAdId, roll: rollType});
+            });
         }
     }
+
 
     // seconds of ads seen (each stitched ad once) - for the statistics
     function countAdSeconds(text) {
@@ -661,7 +846,8 @@
     // ---- backup sessions ----
     function gqlHeaders(asViewer) {
         const h = {'Client-ID': INIT.clientId, 'Content-Type': 'text/plain;charset=UTF-8'};
-        const device = viewer['X-Device-Id'] || INIT.deviceId;
+        const device = validDeviceId(viewer['X-Device-Id']) ? viewer['X-Device-Id']
+                     : (validDeviceId(INIT.deviceId) ? INIT.deviceId : '');
         if (device) {
             h['Device-ID'] = device;
             h['X-Device-Id'] = device;
@@ -878,7 +1064,6 @@
     // ---- what the player gets ----
     function startAd(ctx, text) {
         countAdSeconds(text);
-        notifyAdComplete(text).catch(function () {});
         if (ctx.inAd) return;
         ctx.inAd = true;
         ctx.sessions.forEach(function (s) { if (s.last === 'werbung') s.retryAt = 0; });  // new ad break: ask again
@@ -889,7 +1074,7 @@
         unmask(ctx);
         if (!ctx.inAd) return;
         ctx.inAd = false;
-        spoofedAdIds.clear();
+        resetSpoofPod();
         report('ad-end');
     }
 
@@ -1041,7 +1226,7 @@
     }
 
     async function processMediaPlaylist(url, text) {
-        if (hasAds(text)) notifyAdComplete(text).catch(function () {});
+        if (hasAds(text)) await notifyAdComplete(text);
         const v = lookupVariant(url);
         if (v && v.ctx.vod) return processVod(url, text);
         if (v) return processLive(v.ctx, url, v.want, text);
@@ -1138,7 +1323,11 @@
         parseAttrs: parseAttrs,
         notifyAdComplete: notifyAdComplete,
         spoofedAdIds: spoofedAdIds,
-        recentSpoofedAdIds: recentSpoofedAdIds
+        recentSpoofedAdIds: recentSpoofedAdIds,
+        resetSpoofPod: resetSpoofPod,
+        playerState: playerState,
+        validDeviceId: validDeviceId,
+        gqlHeaders: gqlHeaders
     };
     report('worker-hooked');
 })();

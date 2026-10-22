@@ -718,10 +718,18 @@ class MainWindow(QMainWindow):
                             report_ad=self.report_ad, accent=self.ui["accent"], initial_tab=initial_tab)
         dlg.exec()
         if dlg.settings_changed:
+            flag = "true" if self.filter_engine.ad_spoofing else "false"
+            js = "window.__abTwitchSetSpoofing&&window.__abTwitchSetSpoofing(" + flag + ")"
             for i in range(self.tabs.count()):
-                self.tabs.widget(i).refresh_site_scripts()
+                w = self.tabs.widget(i)
+                w.refresh_site_scripts()
+                try:
+                    if w.is_ready:
+                        w.wv.CoreWebView2.ExecuteScriptAsync(js)
+                except Exception:
+                    pass
         if tab:
-            if dlg.settings_changed and "://" in url:
+            if dlg.needs_reload and "://" in url:
                 tab.reload()
             self.update_shield_badge(tab.blocked_count)
 
