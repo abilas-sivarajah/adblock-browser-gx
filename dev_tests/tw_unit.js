@@ -423,7 +423,7 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
         };
         const w = makeWorker(world, {adSpoofing: true, relay: false});
         const t = w.__abTwitchTest;
-        const names = () => world.spoofBatches.map((b) => b[0] && b[0].variables.input.eventName);
+        const names = () => world.spoofBatches.reduce((acc, b) => acc.concat(b.map((p) => p.variables.input.eventName)), []);
 
         // 11a attribute parser
         const parsed = t.parseAttrs('#EXT-X-DATERANGE:ID="stitched-ad-test",CLASS="twitch-stitched-ad",DURATION=15.235,X-TV-TWITCH-AD-ROLL-TYPE="PREROLL"');
@@ -434,9 +434,12 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
         await w.fetch(USHER);
         await w.fetch(ORIG('720'));
 
-        check('11b ad playlist triggers GQL ad spoofing events', world.spoofBatches.length >= 6);
-        check('11c events are impression, 4 quartiles and pod complete (one GQL each)',
-              names().slice(0, 6).join(',') === 'video_ad_impression,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_pod_complete');
+        check('11b one GQL request carries impression, quartiles and pod complete',
+              world.spoofBatches.length === 1 && names().length === 6);
+        check('11c events are impression, 4 quartiles and pod complete',
+              names().join(',') === 'video_ad_impression,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_quartile_complete,video_ad_pod_complete');
+        check('11c preroll: exactly one ad segment is fetched and discarded',
+              world.log.filter((l) => l.indexOf('/v1/segment/') !== -1).length === 1);
 
         const firstPayload = world.spoofBatches[0] ? JSON.parse(world.spoofBatches[0][0].variables.input.eventPayload) : {};
         check('11d packet payload contains stitched ad details and RADS token',
@@ -491,7 +494,7 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
             tH.resetSpoofPod();
             await tH.notifyAdComplete(stitched([{id: 'stitched-ad-pod2', pod: 1, pos: 0, rad: 'tok-2'}]));
             check('11h second pod after reset is spoofed',
-                  afterFirst >= 6 && worldH.spoofBatches.length >= afterFirst + 6 &&
+                  afterFirst === 1 && worldH.spoofBatches.length === afterFirst + 1 &&
                   worldH.spoofBatches[afterFirst][0].variables.input.radToken === 'tok-2');
         }
 
@@ -504,12 +507,12 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
             const pl = stitched([{id: 'stitched-ad-bounce', pod: 1, pos: 0, rad: 'tok-b'}]);
             await tB.notifyAdComplete(pl);
             const n = worldB.spoofBatches.length;
-            const pods = worldB.spoofBatches.filter((b) => b[0].variables.input.eventName === 'video_ad_pod_complete').length;
+            const pods = worldB.spoofBatches.reduce((k, b) => k + b.filter((p) => p.variables.input.eventName === 'video_ad_pod_complete').length, 0);
             tB.resetSpoofPod();
             await tB.notifyAdComplete(pl);
-            const podsAfter = worldB.spoofBatches.filter((b) => b[0].variables.input.eventName === 'video_ad_pod_complete').length;
+            const podsAfter = worldB.spoofBatches.reduce((k, b) => k + b.filter((p) => p.variables.input.eventName === 'video_ad_pod_complete').length, 0);
             check('11i bounce does not re-spoof the same ad, pod_complete stays once',
-                  worldB.spoofBatches.length === n && pods === 1 && podsAfter === 1);
+                  worldB.spoofBatches.length === n && n === 1 && pods === 1 && podsAfter === 1);
         }
 
         // 11j missing RADS token: nothing is sent
@@ -529,8 +532,9 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
             const wR = makeWorker(worldR, {adSpoofing: true, relay: false});
             await wR.__abTwitchTest.notifyAdComplete(stitched([{id: 'stitched-ad-retry', pod: 1, pos: 0, rad: 'tok-r'}]));
             check('11k first GQL failure is retried',
-                  worldR.spoofBatches.length >= 6 &&
-                  worldR.spoofBatches[0][0].variables.input.eventName === 'video_ad_impression');
+                  worldR.spoofFailCount === 0 && worldR.spoofBatches.length === 1 &&
+                  worldR.spoofBatches[0][0].variables.input.eventName === 'video_ad_impression' &&
+                  worldR.spoofBatches[0][5].variables.input.eventName === 'video_ad_pod_complete');
         }
 
         // 11l player mute/volume/visibility is copied into the payload
@@ -565,32 +569,43 @@ const ev = (w, name) => w.events.filter((e) => e.event === name);
             check('11n off: runtime-disabled worker sends nothing', worldT.spoofBatches.length === 0);
             wT.pageSend({event: 'set-spoofing', enabled: true});
             await wT.__abTwitchTest.notifyAdComplete(pl);
-            check('11n on: BroadcastChannel toggle enables spoofing without reload', worldT.spoofBatches.length >= 6);
+            check('11n on: BroadcastChannel toggle enables spoofing without reload', worldT.spoofBatches.length === 1);
         }
 
-        // 11o quartile spread is capped, so a long ad does not delay pod_complete by its full length
+        // 11o a two-ad pod: pod_complete rides only on the request that fills the pod
         {
-            const wO = makeWorker(makeWorld(), {adSpoofing: true, relay: false,
-                timing: Object.assign({}, TIMING, {spoofRealtime: true, spoofSpan: 4000, spoofJitter: 0})});
-            const d = wO.__abTwitchTest.spoofDelayMs;
-            check('11o a 30 s ad finishes its beacons within the 4 s cap',
-                  d(30, 0) === 0 && d(30, 4) === 4000 && d(2, 4) === 2000);
+            const worldO = makeWorld();
+            worldO.spoofBatches = [];
+            const wO = makeWorker(worldO, {adSpoofing: true, relay: false});
+            await wO.__abTwitchTest.notifyAdComplete(stitched([
+                {id: 'stitched-ad-a', pod: 2, pos: 0, rad: 'tok-a'},
+                {id: 'stitched-ad-b', pod: 2, pos: 1, rad: 'tok-b'},
+            ]));
+            const lens = worldO.spoofBatches.map((b) => b.map((p) => p.variables.input.eventName));
+            check('11o pod_complete is sent once, with the last ad',
+                  lens.length === 2 && lens[0].length === 5 && lens[0].indexOf('video_ad_pod_complete') === -1 &&
+                  lens[1][lens[1].length - 1] === 'video_ad_pod_complete');
         }
 
-        // 11p endAd while quartiles are still in flight must not drop pod_complete
+        // 11p preroll bytes are fetched; a midroll is not
         {
-            const worldF = makeWorld();
-            worldF.spoofBatches = [];
-            const wF = makeWorker(worldF, {adSpoofing: true, relay: false,
-                timing: Object.assign({}, TIMING, {spoofRealtime: true, spoofSpan: 60, spoofJitter: 0})});
-            const pl = stitched([{id: 'stitched-ad-inflight', pod: 1, pos: 0, rad: 'tok-f', duration: 30}]);
-            const pending = wF.__abTwitchTest.notifyAdComplete(pl);
-            wF.__abTwitchTest.resetSpoofPod();
-            await pending;
-            await new Promise((r) => setTimeout(r, 250));
-            const evs = worldF.spoofBatches.map((b) => b[0].variables.input.eventName);
-            check('11p pod_complete still arrives after the break ends mid-spoof',
-                  evs[0] === 'video_ad_impression' && evs[evs.length - 1] === 'video_ad_pod_complete' && evs.length === 6);
+            function withMedia(base, adUrl, liveUrl) {
+                return base + '#EXTINF:2.000,Amazon|1\n' + adUrl + '\n#EXTINF:2.000,live\n' + liveUrl + '\n';
+            }
+            const worldP2 = makeWorld();
+            const wP2 = makeWorker(worldP2, {adSpoofing: true, relay: false});
+            await wP2.__abTwitchTest.notifyAdComplete(withMedia(
+                stitched([{id: 'stitched-ad-pre', pod: 1, pos: 0, rad: 'tok-pre', roll: 'PREROLL'}]),
+                'https://cdn.example/ad-preroll.ts', 'https://cdn.example/live-pre.ts'));
+            const worldMid = makeWorld();
+            const wMid = makeWorker(worldMid, {adSpoofing: true, relay: false});
+            await wMid.__abTwitchTest.notifyAdComplete(withMedia(
+                stitched([{id: 'stitched-ad-mid', pod: 1, pos: 0, rad: 'tok-mid', roll: 'MIDROLL'}]),
+                'https://cdn.example/ad-mid.ts', 'https://cdn.example/live-mid.ts'));
+            check('11p preroll segment is fetched, live and midroll segments are not',
+                  worldP2.log.some((l) => l.indexOf('ad-preroll.ts') !== -1) &&
+                  !worldP2.log.some((l) => l.indexOf('live-pre.ts') !== -1) &&
+                  !worldMid.log.some((l) => l.indexOf('ad-mid.ts') !== -1));
         }
     }
 
